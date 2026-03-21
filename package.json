@@ -16,7 +16,7 @@
     "dev": "tsc --watch",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test 'tests/*.test.ts'",
+    "test": "find tests -name '*.test.ts' -exec node --import tsx --test {} +",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
