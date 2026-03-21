@@ -41,6 +41,12 @@ import {
 } from "./github-api.js"
 
 // ============================================================
+// Constants
+// ============================================================
+
+const COMMAND_HANDLED_SENTINEL = "__BUDGET_COMMAND_HANDLED__"
+
+// ============================================================
 // Helpers
 // ============================================================
 
@@ -342,7 +348,11 @@ const plugin = (async (ctx) => {
           ].join("\n")
       }
 
+      // Send result as a no-reply message, then throw sentinel to abort
+      // the command flow before OpenCode invokes the LLM.
+      // This is the standard pattern used by opencode-quota, DCP, etc.
       await sendMessage(input.sessionID, result)
+      throw new Error(COMMAND_HANDLED_SENTINEL)
     },
 
     // ----------------------------------------------------------
