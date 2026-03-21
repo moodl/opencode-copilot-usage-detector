@@ -23,10 +23,13 @@ This plugin learns these limits from your own usage patterns and warns you as yo
 - **Token & request tracking** — Per-day, per-model usage with RPM monitoring
 - **Adaptive limit learning** — Weighted averages with exponential recency decay and confidence scoring
 - **Multi-dimensional hypothesis tracking** — Learns whether limits are token-based, request-based, or RPM-based
+- **Blocked model detection** — Identifies models not available on your plan (403, access denied, etc.) and separates them from real rate limits
 - **Preview model detection** — Automatically identifies models with separate, stricter limits
 - **Rate-limit classification** — 5-stage classifier distinguishing burst, preview, and daily limits
-- **System prompt injection** — Budget status in every LLM context (zero tool-call overhead)
+- **Toast notifications** — Non-intrusive TUI toasts for rate limits, blocked models, and budget thresholds (doesn't pollute conversation)
+- **System prompt injection** — Budget status in every LLM context (zero tool-call overhead, skipped for subagent sessions)
 - **Threshold notifications** — Configurable alerts at 60%, 80%, 95% of estimated limits
+- **Config validation** — Validates config types on startup, warns on unknown keys
 - **Temporal patterns** — Learns what time of day you typically hit limits and how model choice affects runway
 - **Model fallback detection** — Detects when Copilot silently downgrades your model
 - **GitHub billing API integration** — Fetches real premium request usage when auth is available
@@ -96,6 +99,19 @@ The plugin works automatically -- no action needed. It:
 | `/budget insights` | Learned patterns, limit estimates, temporal analysis |
 | `/budget errors` | Rate limit events and error catalog |
 | `/budget recompute` | Force recompute all estimates from observations |
+| `/budget reset` | Wipe today's data and start fresh |
+| `/budget clean [target]` | Remove specific entries from the observation log |
+
+#### Clean targets
+
+| Target | Description |
+|--------|-------------|
+| `errors` | Remove all logged errors |
+| `blocked` | Remove all blocked model entries |
+| `limit_hits` | Remove all rate limit entries |
+| `fake_hits` | Remove limit_hits from models with no usage (misrecorded blocked models) |
+| `model <name>` | Remove all entries for a specific model |
+| `before <date>` | Remove entries before a date (YYYY-MM-DD) |
 
 ### Example: `/budget status`
 
@@ -144,21 +160,13 @@ Model breakdown:
 </copilot-budget>
 ```
 
-### Example: Threshold Notification
+### Toast Notifications
 
-When approaching a learned limit, you'll see a chat message like:
+Alerts appear as non-intrusive TUI toasts that don't pollute the conversation:
 
-```
-⚡ 80% of daily Copilot budget used (2.3M / ~2.9M est.)
-```
-
-### Example: Rate Limit Alert
-
-```
-🔴 Rate limited! Day total: 2.8M tokens, 142 requests
-   Model: claude-opus-4.5 | Status: 429 | Class: hard_daily_limit
-   Run `/budget errors` for details.
-```
+- **Budget warning** — `80% of daily budget used (2.3M / ~2.9M est.)`
+- **Rate limited** — `2.8M tokens, 142 req | claude-opus-4.5 | hard_daily_limit`
+- **Model blocked** — `claude-opus-4.6 is not available on your plan (status: 403)`
 
 ### Example: `/budget insights`
 
@@ -259,10 +267,12 @@ The JSONL file auto-rotates at 50MB or when entries are older than 90 days. No d
 ```
 Plugin Entry (copilot-budget.ts)
 +-- Config Hook (registers /budget command)
-+-- Command Handler (/budget subcommands)
++-- Command Handler (/budget subcommands, sentinel pattern)
 +-- Event Handler (message.updated, session.error)
++-- Blocked Model Detection (early filter before rate-limit path)
++-- Toast Notifications (rate limit, blocked, threshold)
 +-- chat.params Hook (per-session model/provider capture)
-+-- System Prompt Injection
++-- System Prompt Injection (skipped for subagents)
 +-- Session Compaction Context
 +-- Budget Tool (for LLM tool-calling)
 
@@ -298,7 +308,7 @@ Persistence (persistence.ts)
 +-- JSONL append + filtered read
 +-- Atomic rotation (size/age)
 +-- Estimates read/write
-+-- Config management
++-- Config management + validation
 ```
 
 ## Development

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.3 (2026-03-21)
+
+### Features
+- Toast notifications — rate limit, model blocked, and budget threshold alerts now use non-intrusive TUI toasts instead of conversation messages
+- Subagent session skip — system prompt injection is suppressed for subagent sessions (saves tokens)
+- Config validation — validates types on startup, warns on unknown keys, falls back to defaults for invalid values
+- `/budget clean fake_hits` — removes limit_hit entries from models with no usage (blocked models misrecorded as rate limits)
+- Retroactive blocked detection — old limit_hit entries from models with no usage are rerouted to blocked models on recovery
+
+### Improvements
+- Extract `handled()` sentinel helper (ecosystem standard pattern from opencode-quota/DCP)
+- Add `predicate` filter support to `removeObservations()`
+- Add `exports` and `engines` fields to package.json
+- Subagent detection result is cached per session (avoids repeated API calls)
+
 ## 0.1.1 (2026-03-21)
 
 ### Features
