@@ -1,0 +1,38 @@
+{
+  "name": "opencode-copilot-usage-detector",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "OpenCode plugin that tracks GitHub Copilot token usage, learns rate limits empirically, and proactively informs the user",
+  "main": "./dist/copilot-budget.js",
+  "types": "./dist/copilot-budget.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "plugin",
+    "copilot",
+    "budget",
+    "rate-limit",
+    "token-tracking"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/moodl/opencode-copilot-usage-detector.git"
+  },
+  "author": "moodl",
+  "license": "MIT",
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.2.0"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.2.27",
+    "@opencode-ai/sdk": "^1.2.27",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0"
+  }
+}
