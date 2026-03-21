@@ -14,9 +14,19 @@ import {
   getDaily,
   getCurrentRPM,
 } from "./aggregator.js"
-import { ensureDataDir, readConfig } from "./persistence.js"
+import {
+  ensureDataDir,
+  readConfig,
+  appendObservation,
+  readObservations,
+} from "./persistence.js"
 import { budgetTool } from "./tools.js"
 import { enableDebug, debugLogEvent, debugLogChatParams } from "./debug.js"
+import {
+  classifyErrorImmediate,
+  extractRateLimitHeaders,
+  scheduleReclassification,
+} from "./classifier.js"
 
 // ============================================================
 // Helpers
@@ -56,6 +66,10 @@ function isRateLimitError(error: ApiError): boolean {
     msg.includes("capacity") ||
     msg.includes("throttl")
   )
+}
+
+function readRecentObservations(sinceTs: string) {
+  return readObservations({ since: sinceTs })
 }
 
 // ============================================================
@@ -118,49 +132,129 @@ const plugin: Plugin = async ({ client }) => {
           processAssistantMessage(incoming)
         }
 
-        // ----- session.error: detect rate limits -----
+        // ----- session.error: log all errors, detect rate limits -----
         if (event.type === "session.error") {
           const errEvent = event as EventSessionError
           const error = errEvent.properties.error
           if (!error) return
-
-          // Only process API errors that look like rate limits
-          if (!isApiError(error)) return
-          if (!isRateLimitError(error)) return
-
-          const incomingError: IncomingError = {
-            sessionId: errEvent.properties.sessionID,
-            errorName: error.name,
-            errorMessage: error.data?.message ?? "",
-            errorRaw: JSON.stringify(error),
-            statusCode: error.data?.statusCode,
-            isRetryable: error.data?.isRetryable ?? false,
-            responseHeaders: error.data?.responseHeaders,
-            responseBody: error.data?.responseBody,
-          }
-
-          processErrorEvent(incomingError, lastRequestedModel, lastRequestedProvider)
-
-          // Notify user about rate limit
           const sessionId = errEvent.properties.sessionID
-          if (sessionId) {
-            const d = getDaily()
-            try {
-              await client.session.promptAsync({
-                path: { id: sessionId },
-                body: {
-                  noReply: true,
-                  parts: [
-                    {
-                      type: "text",
-                      text: `\u{1F534} **Rate limited!** Day total: ${formatTokensShort(d.totalTokens)} tokens, ${d.totalRequests} requests | Model: ${lastRequestedModel ?? "unknown"} | Status: ${error.data?.statusCode ?? "unknown"}\n\nRun \`/budget errors\` for details.`,
-                    },
-                  ],
-                },
+
+          if (isApiError(error)) {
+            const apiErr = error
+            const rateLimitHeaders = extractRateLimitHeaders(apiErr.data?.responseHeaders)
+            const classification = classifyErrorImmediate(
+              apiErr.data?.message ?? "",
+              apiErr.data?.statusCode,
+              apiErr.data?.responseHeaders
+            )
+
+            if (isRateLimitError(apiErr)) {
+              // This looks like a rate limit — log as limit_hit
+              const incomingError: IncomingError = {
+                sessionId,
+                errorName: apiErr.name,
+                errorMessage: apiErr.data?.message ?? "",
+                errorRaw: JSON.stringify(apiErr),
+                statusCode: apiErr.data?.statusCode,
+                isRetryable: apiErr.data?.isRetryable ?? false,
+                responseHeaders: apiErr.data?.responseHeaders,
+                responseBody: apiErr.data?.responseBody,
+              }
+
+              processErrorEvent(incomingError, lastRequestedModel, lastRequestedProvider)
+
+              // Override the default "unknown" class with classifier result
+              const d = getDaily()
+              if (d.limitHits.length > 0) {
+                d.limitHits[d.limitHits.length - 1].class = classification.class
+              }
+
+              // Schedule delayed reclassification
+              const errorTs = new Date().toISOString()
+              scheduleReclassification(errorTs, () => {
+                const current = getDaily()
+                const recentObs = readRecentObservations(errorTs)
+                const errorModel = lastRequestedModel ?? "unknown"
+                const otherModels = recentObs
+                  .filter((o) => o.type === "usage" && o.model !== errorModel)
+                  .map((o) => (o as any).model as string)
+                const uniqueOtherModels = [...new Set(otherModels)]
+                const totalRecent = recentObs.length
+                const errorRecent = recentObs.filter((o) => o.type === "limit_hit").length
+                const recoveryEvent = recentObs.find((o) => o.type === "recovery")
+                const recoveryMinutes = recoveryEvent
+                  ? (new Date(recoveryEvent.ts).getTime() - new Date(errorTs).getTime()) / 60_000
+                  : null
+
+                return {
+                  recentObservations: recentObs.map((o) => ({
+                    type: o.type,
+                    model: "model" in o ? (o as any).model : undefined,
+                    ts: o.ts,
+                  })),
+                  dailyTokens: current.totalTokens,
+                  dailyRequests: current.totalRequests,
+                  globalEstimate: null, // Will be filled in by estimator in Phase 4
+                  otherModelsWorking: uniqueOtherModels.length > 0,
+                  workingModels: uniqueOtherModels,
+                  errorRate: totalRecent > 0 ? errorRecent / totalRecent : 0,
+                  minutesSinceError: (Date.now() - new Date(errorTs).getTime()) / 60_000,
+                  hasRecovered: !!recoveryEvent,
+                  recoveryMinutes,
+                }
               })
-            } catch {
-              // Notification failure is not critical
+
+              // Notify user about rate limit
+              if (sessionId) {
+                const headerInfo = rateLimitHeaders
+                  ? ` | Headers: ${Object.entries(rateLimitHeaders.all).map(([k, v]) => `${k}=${v}`).join(", ")}`
+                  : ""
+                try {
+                  await client.session.promptAsync({
+                    path: { id: sessionId },
+                    body: {
+                      noReply: true,
+                      parts: [
+                        {
+                          type: "text",
+                          text: `\u{1F534} **Rate limited!** Day total: ${formatTokensShort(d.totalTokens)} tokens, ${d.totalRequests} requests | Model: ${lastRequestedModel ?? "unknown"} | Status: ${apiErr.data?.statusCode ?? "unknown"} | Class: ${classification.class}${headerInfo}\n\nRun \`/budget errors\` for details.`,
+                        },
+                      ],
+                    },
+                  })
+                } catch {
+                  // Notification failure is not critical
+                }
+              }
+            } else {
+              // Non-rate-limit API error — log for catalog building
+              appendObservation({
+                ts: new Date().toISOString(),
+                type: "error_logged",
+                session: sessionId ?? "unknown",
+                model: lastRequestedModel ?? "unknown",
+                provider: lastRequestedProvider ?? "unknown",
+                error_name: apiErr.name,
+                error_message: apiErr.data?.message ?? "",
+                error_raw: JSON.stringify(apiErr),
+                status_code: apiErr.data?.statusCode,
+                is_retryable: apiErr.data?.isRetryable ?? false,
+              })
             }
+          } else {
+            // Non-API error (ProviderAuthError, UnknownError, etc.) — log for catalog
+            appendObservation({
+              ts: new Date().toISOString(),
+              type: "error_logged",
+              session: sessionId ?? "unknown",
+              model: lastRequestedModel ?? "unknown",
+              provider: lastRequestedProvider ?? "unknown",
+              error_name: (error as any).name ?? "Unknown",
+              error_message: (error as any).data?.message ?? "",
+              error_raw: JSON.stringify(error),
+              status_code: undefined,
+              is_retryable: false,
+            })
           }
         }
       } catch (err) {

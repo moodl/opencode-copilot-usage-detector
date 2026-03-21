@@ -76,6 +76,19 @@ export interface DayEndEvent {
   models_used: Record<string, { tokens: number; requests: number }>
 }
 
+export interface ErrorLoggedEvent {
+  ts: string
+  type: "error_logged"
+  session: string
+  model: string
+  provider: string
+  error_name: string
+  error_message: string
+  error_raw: string
+  status_code: number | undefined
+  is_retryable: boolean
+}
+
 export type ObservationEvent =
   | UsageEvent
   | LimitHitEvent
@@ -83,6 +96,7 @@ export type ObservationEvent =
   | RecoveryEvent
   | ModelFallbackEvent
   | DayEndEvent
+  | ErrorLoggedEvent
 
 export type LimitClass =
   | "unknown"
