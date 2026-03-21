@@ -357,10 +357,12 @@ const plugin = (async (ctx) => {
             const modelTokens = modelUsage?.tokens ?? 0
             const modelRequests = modelUsage?.requests ?? 0
 
-            // Check for blocked model BEFORE rate limit check
-            if (isModelBlockedError(apiErr, modelTokens, modelRequests)) {
+            // Helper: record blocked model event and optionally notify user
+            async function handleBlockedModel(): Promise<void> {
               const d = getDaily()
               const blockedTs = new Date().toISOString()
+              const alreadyNotified = d.blockedModels.some((b) => b.model === errModel)
+
               d.blockedModels.push({
                 ts: blockedTs,
                 model: errModel,
@@ -383,12 +385,18 @@ const plugin = (async (ctx) => {
                 day_cumulative_requests: d.totalRequests,
               })
 
-              if (sessionId) {
+              // Only notify once per model per day
+              if (sessionId && !alreadyNotified) {
                 await sendMessage(
                   sessionId,
                   `\u{1F6AB} **Model blocked:** ${errModel} is not available on your plan (status: ${apiErr.data?.statusCode ?? "unknown"}). This won't count toward rate limit estimates.`
                 )
               }
+            }
+
+            // Check for blocked model BEFORE rate limit check
+            if (isModelBlockedError(apiErr, modelTokens, modelRequests)) {
+              await handleBlockedModel()
               return // Skip rate-limit path entirely
             }
 
@@ -396,6 +404,12 @@ const plugin = (async (ctx) => {
             const classification = classifyErrorImmediate(
               apiErr.data?.message ?? "", apiErr.data?.statusCode, apiErr.data?.responseHeaders
             )
+
+            // Safety net: classifier detected blocked model that bypassed isModelBlockedError
+            if (classification.class === "model_blocked") {
+              await handleBlockedModel()
+              return
+            }
 
             if (isRateLimitError(apiErr)) {
               const incomingError: IncomingError = {
