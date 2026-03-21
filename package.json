@@ -9,7 +9,8 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "clean": "rm -rf dist",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/**/*.test.ts"
   },
   "keywords": [
     "opencode",
@@ -33,6 +34,7 @@
     "@opencode-ai/plugin": "^1.2.27",
     "@opencode-ai/sdk": "^1.2.27",
     "@types/node": "^22.0.0",
+    "tsx": "^4.21.0",
     "typescript": "^5.8.0"
   }
 }

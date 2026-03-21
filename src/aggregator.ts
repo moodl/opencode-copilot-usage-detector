@@ -297,3 +297,10 @@ export function getSession(id: string): SessionState {
   }
   return s
 }
+
+/** Reset all module-level state. For testing only. */
+export function resetState(): void {
+  daily = createEmptyDay()
+  sessions.clear()
+  processedMessages.clear()
+}

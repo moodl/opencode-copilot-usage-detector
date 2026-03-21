@@ -187,3 +187,86 @@ export function readConfig(): PluginConfig {
 export function getDataDir(): string {
   return DATA_DIR
 }
+
+// ============================================================
+// Factory for custom data directory (for testing)
+// ============================================================
+
+export interface PersistenceInstance {
+  ensureDataDir(): void
+  appendObservation(event: ObservationEvent): void
+  readObservations(filter?: { since?: string; type?: string }): ObservationEvent[]
+  readTodayObservations(today: string): ObservationEvent[]
+  readEstimates(): Record<string, unknown> | null
+  writeEstimates(data: Record<string, unknown> | object): void
+  readConfig(): PluginConfig
+  getDataDir(): string
+}
+
+export function createPersistence(dataDir: string): PersistenceInstance {
+  const obsFile = join(dataDir, "observations.jsonl")
+  const estFile = join(dataDir, "estimates.json")
+  const cfgFile = join(dataDir, "config.json")
+
+  return {
+    ensureDataDir() {
+      if (!existsSync(dataDir)) {
+        mkdirSync(dataDir, { recursive: true })
+      }
+    },
+
+    appendObservation(event: ObservationEvent) {
+      this.ensureDataDir()
+      appendFileSync(obsFile, JSON.stringify(event) + "\n")
+    },
+
+    readObservations(filter?: { since?: string; type?: string }): ObservationEvent[] {
+      if (!existsSync(obsFile)) return []
+      try {
+        return readFileSync(obsFile, "utf-8")
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line) as ObservationEvent)
+          .filter((e) => {
+            if (filter?.since && e.ts < filter.since) return false
+            if (filter?.type && e.type !== filter.type) return false
+            return true
+          })
+      } catch {
+        return []
+      }
+    },
+
+    readTodayObservations(today: string): ObservationEvent[] {
+      return this.readObservations({ since: today + "T00:00:00" })
+    },
+
+    readEstimates(): Record<string, unknown> | null {
+      if (!existsSync(estFile)) return null
+      try {
+        return JSON.parse(readFileSync(estFile, "utf-8"))
+      } catch {
+        return null
+      }
+    },
+
+    writeEstimates(data: Record<string, unknown> | object) {
+      this.ensureDataDir()
+      writeFileSync(estFile, JSON.stringify(data, null, 2) + "\n")
+    },
+
+    readConfig(): PluginConfig {
+      if (!existsSync(cfgFile)) return { ...DEFAULT_CONFIG }
+      try {
+        const raw = JSON.parse(readFileSync(cfgFile, "utf-8")) as Partial<PluginConfig>
+        return { ...DEFAULT_CONFIG, ...raw }
+      } catch {
+        return { ...DEFAULT_CONFIG }
+      }
+    },
+
+    getDataDir() {
+      return dataDir
+    },
+  }
+}

@@ -40,13 +40,13 @@ import {
 // Helpers
 // ============================================================
 
-function formatTokensShort(n: number): string {
+export function formatTokensShort(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`
   return String(n)
 }
 
-function isAssistantMessage(msg: unknown): msg is AssistantMessage {
+export function isAssistantMessage(msg: unknown): msg is AssistantMessage {
   return (
     typeof msg === "object" &&
     msg !== null &&
@@ -55,7 +55,7 @@ function isAssistantMessage(msg: unknown): msg is AssistantMessage {
   )
 }
 
-function isApiError(error: unknown): error is ApiError {
+export function isApiError(error: unknown): error is ApiError {
   return (
     typeof error === "object" &&
     error !== null &&
@@ -63,7 +63,7 @@ function isApiError(error: unknown): error is ApiError {
   )
 }
 
-function isRateLimitError(error: ApiError): boolean {
+export function isRateLimitError(error: ApiError): boolean {
   const code = error.data?.statusCode
   const msg = error.data?.message?.toLowerCase() ?? ""
   return (

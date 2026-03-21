@@ -172,7 +172,7 @@ async function fetchPremiumRequests(
   return parsePremiumRequestResponse(data, config)
 }
 
-function parsePremiumRequestResponse(
+export function parsePremiumRequestResponse(
   data: unknown,
   config: PluginConfig
 ): PremiumRequestSummary | null {
@@ -289,6 +289,19 @@ export function getAuthSetupMessage(): string | null {
   if (!needsAuthSetup() || authNotifiedUser) return null
   authNotifiedUser = true
   return "To enable premium request tracking from the GitHub API, run:\n`gh auth refresh -h github.com -s user`\nThen restart OpenCode. Without this, the plugin uses empirical tracking only."
+}
+
+/** Reset all module-level state. For testing only. */
+export function resetApiState(): void {
+  apiStatus = {
+    authMethod: "none",
+    username: null,
+    lastFetch: 0,
+    lastError: null,
+    premiumRequests: null,
+  }
+  authProbed = false
+  authNotifiedUser = false
 }
 
 export function formatPremiumRequestStatus(pr: PremiumRequestSummary): string {

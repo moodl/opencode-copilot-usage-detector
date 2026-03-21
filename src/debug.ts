@@ -16,6 +16,11 @@ export function isDebugEnabled(): boolean {
   return enabled
 }
 
+/** Reset debug state. For testing only. */
+export function resetDebug(): void {
+  enabled = false
+}
+
 export function debugLogEvent(type: string, data: unknown): void {
   if (!enabled) return
   try {

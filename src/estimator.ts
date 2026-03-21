@@ -104,7 +104,7 @@ function exponentialWeight(daysAgo: number): number {
   return Math.exp(-daysAgo / DECAY_HALF_LIFE_DAYS)
 }
 
-function weightedMean(values: number[], weights: number[]): number {
+export function weightedMean(values: number[], weights: number[]): number {
   let sumW = 0
   let sumWV = 0
   for (let i = 0; i < values.length; i++) {
@@ -114,14 +114,14 @@ function weightedMean(values: number[], weights: number[]): number {
   return sumW > 0 ? sumWV / sumW : 0
 }
 
-function stdDev(values: number[]): number {
+export function stdDev(values: number[]): number {
   if (values.length < 2) return 0
   const mean = values.reduce((a, b) => a + b, 0) / values.length
   const variance = values.reduce((sum, v) => sum + (v - mean) ** 2, 0) / (values.length - 1)
   return Math.sqrt(variance)
 }
 
-function baseConfidence(dataPoints: number): number {
+export function baseConfidence(dataPoints: number): number {
   if (dataPoints <= 0) return 0
   if (dataPoints === 1) return 0.4
   if (dataPoints === 2) return 0.55
@@ -130,7 +130,7 @@ function baseConfidence(dataPoints: number): number {
   return 0.95
 }
 
-function confidenceWithDecay(dataPoints: number, daysSinceLastHit: number): number {
+export function confidenceWithDecay(dataPoints: number, daysSinceLastHit: number): number {
   const base = baseConfidence(dataPoints)
   if (!isFinite(daysSinceLastHit) || daysSinceLastHit > DECAY_MAX_DAYS) {
     return base * 0.3
