@@ -1,5 +1,12 @@
 import type { Plugin } from "@opencode-ai/plugin"
-import type { AssistantTokens, IncomingMessage, IncomingError } from "./aggregator.js"
+import type {
+  Event,
+  AssistantMessage,
+  EventMessageUpdated,
+  EventSessionError,
+  ApiError,
+} from "@opencode-ai/sdk"
+import type { IncomingMessage, IncomingError } from "./aggregator.js"
 import {
   recoverFromJSONL,
   processAssistantMessage,
@@ -21,6 +28,36 @@ function formatTokensShort(n: number): string {
   return String(n)
 }
 
+function isAssistantMessage(msg: unknown): msg is AssistantMessage {
+  return (
+    typeof msg === "object" &&
+    msg !== null &&
+    (msg as any).role === "assistant" &&
+    typeof (msg as any).id === "string"
+  )
+}
+
+function isApiError(error: unknown): error is ApiError {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as any).name === "APIError"
+  )
+}
+
+function isRateLimitError(error: ApiError): boolean {
+  const code = error.data?.statusCode
+  const msg = error.data?.message?.toLowerCase() ?? ""
+  return (
+    code === 429 ||
+    msg.includes("rate") ||
+    msg.includes("limit") ||
+    msg.includes("exceeded") ||
+    msg.includes("capacity") ||
+    msg.includes("throttl")
+  )
+}
+
 // ============================================================
 // Plugin
 // ============================================================
@@ -29,7 +66,7 @@ const plugin: Plugin = async ({ client }) => {
   // Initialize
   ensureDataDir()
   const config = readConfig()
-  if ((config as any).debug) {
+  if (config.debug) {
     enableDebug()
   }
   recoverFromJSONL()
@@ -42,20 +79,20 @@ const plugin: Plugin = async ({ client }) => {
     // ----------------------------------------------------------
     // Event handler
     // ----------------------------------------------------------
-    event: async ({ event }) => {
+    event: async ({ event }: { event: Event }) => {
       try {
         // Debug: log ALL events when debug mode is enabled
         debugLogEvent(event.type, event)
 
         // ----- message.updated: extract tokens from assistant messages -----
         if (event.type === "message.updated") {
-          const msg = (event as any).properties?.info
-          if (!msg || msg.role !== "assistant") return
+          const msgEvent = event as EventMessageUpdated
+          const msg = msgEvent.properties.info
+          if (!isAssistantMessage(msg)) return
 
           // Only process if the message has a finish reason (completed)
           const finished = !!msg.finish
-          const tokens: AssistantTokens = msg.tokens ?? {
-            total: 0,
+          const tokens = msg.tokens ?? {
             input: 0,
             output: 0,
             reasoning: 0,
@@ -67,38 +104,32 @@ const plugin: Plugin = async ({ client }) => {
             sessionId: msg.sessionID,
             modelId: msg.modelID ?? lastRequestedModel ?? "unknown",
             providerId: msg.providerID ?? lastRequestedProvider ?? "unknown",
-            tokens,
+            tokens: {
+              total: tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write,
+              input: tokens.input,
+              output: tokens.output,
+              reasoning: tokens.reasoning,
+              cache: tokens.cache,
+            },
             cost: msg.cost ?? 0,
             finished,
           }
 
           processAssistantMessage(incoming)
-
-          // Check if we were in limit state and this is a recovery
-          // (handled inside processAssistantMessage)
         }
 
         // ----- session.error: detect rate limits -----
         if (event.type === "session.error") {
-          const props = (event as any).properties
-          const error = props?.error
+          const errEvent = event as EventSessionError
+          const error = errEvent.properties.error
           if (!error) return
 
-          // Only process API errors (rate limits etc.)
-          // Other error types: ProviderAuthError, UnknownError, MessageOutputLengthError, MessageAbortedError
-          const isApiError = error.name === "APIError"
-          const isRateLimitLikely =
-            isApiError &&
-            (error.data?.statusCode === 429 ||
-              error.data?.message?.toLowerCase().includes("rate") ||
-              error.data?.message?.toLowerCase().includes("limit") ||
-              error.data?.message?.toLowerCase().includes("exceeded") ||
-              error.data?.message?.toLowerCase().includes("capacity"))
-
-          if (!isRateLimitLikely) return
+          // Only process API errors that look like rate limits
+          if (!isApiError(error)) return
+          if (!isRateLimitError(error)) return
 
           const incomingError: IncomingError = {
-            sessionId: props.sessionID,
+            sessionId: errEvent.properties.sessionID,
             errorName: error.name,
             errorMessage: error.data?.message ?? "",
             errorRaw: JSON.stringify(error),
@@ -111,7 +142,7 @@ const plugin: Plugin = async ({ client }) => {
           processErrorEvent(incomingError, lastRequestedModel, lastRequestedProvider)
 
           // Notify user about rate limit
-          const sessionId = props.sessionID
+          const sessionId = errEvent.properties.sessionID
           if (sessionId) {
             const d = getDaily()
             try {

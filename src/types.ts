@@ -135,6 +135,7 @@ export interface SessionState {
 // ============================================================
 
 export interface PluginConfig {
+  debug: boolean
   copilot_plan: string
   known_preview_models: string[]
   known_stable_models: string[]
@@ -146,6 +147,7 @@ export interface PluginConfig {
 }
 
 export const DEFAULT_CONFIG: PluginConfig = {
+  debug: false,
   copilot_plan: "pro",
   known_preview_models: [],
   known_stable_models: [],
