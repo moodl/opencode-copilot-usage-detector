@@ -298,6 +298,11 @@ export function scheduleReclassification(
     }
   }, RECLASSIFY_DELAY_MS)
 
+  // Don't prevent process exit while waiting for reclassification
+  if (typeof timer === "object" && "unref" in timer) {
+    timer.unref()
+  }
+
   pendingTimers.set(eventTs, timer)
 }
 

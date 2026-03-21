@@ -111,14 +111,19 @@ function maybeRotateJsonl(): void {
         const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
         const recent = allObs.filter((e) => e.ts >= cutoff)
 
-        // Write recent events to temp file first, then swap atomically
+        // Write recent events to temp file, then swap with rollback on failure
         const recentContent = recent.map((e) => JSON.stringify(e)).join("\n") + "\n"
         const tempPath = OBSERVATIONS_FILE + ".tmp"
         writeFileSync(tempPath, recentContent)
 
         const archivePath = safeArchivePath("archive")
         renameSync(OBSERVATIONS_FILE, archivePath)
-        renameSync(tempPath, OBSERVATIONS_FILE)
+        try {
+          renameSync(tempPath, OBSERVATIONS_FILE)
+        } catch {
+          // Rollback: restore original from archive
+          try { renameSync(archivePath, OBSERVATIONS_FILE) } catch { /* best effort */ }
+        }
       }
     }
   } catch {

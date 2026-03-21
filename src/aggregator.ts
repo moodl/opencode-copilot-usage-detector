@@ -24,11 +24,14 @@ export function setTimezone(tz: string): void {
 
 function todayString(): string {
   try {
-    // 'sv' locale gives YYYY-MM-DD format
-    return new Date().toLocaleDateString("sv", { timeZone: configuredTimezone })
+    // 'sv' locale gives YYYY-MM-DD format on full-ICU Node.js builds
+    const result = new Date().toLocaleDateString("sv", { timeZone: configuredTimezone })
+    // Validate output is actually YYYY-MM-DD (silent fallback on minimal-ICU builds)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(result)) return result
   } catch {
-    return new Date().toISOString().split("T")[0]
+    // Timezone not supported or locale unavailable
   }
+  return new Date().toISOString().split("T")[0]
 }
 
 function createEmptyDay(): DailyState {
@@ -75,7 +78,7 @@ function checkDayRollover(): void {
   if (daily.date !== today) {
     // Write day_end event for previous day
     const dayEnd = {
-      ts: daily.date + "T23:59:59Z",
+      ts: daily.date + "T23:59:59",
       type: "day_end" as const,
       day_cumulative_tokens: daily.totalTokens,
       day_cumulative_requests: daily.totalRequests,

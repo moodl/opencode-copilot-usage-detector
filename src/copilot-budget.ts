@@ -99,11 +99,27 @@ const plugin = (async (ctx) => {
   recoverFromJSONL()
 
   // Track the last requested model per session (avoids cross-session contamination)
-  const sessionModels = new Map<string, { model: string; provider: string }>()
+  const sessionModels = new Map<string, { model: string; provider: string; ts: number }>()
+  const SESSION_MODEL_MAX = 500
+  const SESSION_MODEL_TTL_MS = 24 * 60 * 60 * 1000 // 24 hours
 
   function getSessionModel(sessionId: string): { model: string | null; provider: string | null } {
     const entry = sessionModels.get(sessionId)
     return entry ? { model: entry.model, provider: entry.provider } : { model: null, provider: null }
+  }
+
+  function pruneSessionModels(): void {
+    if (sessionModels.size <= SESSION_MODEL_MAX) return
+    const now = Date.now()
+    for (const [key, val] of sessionModels) {
+      if (now - val.ts > SESSION_MODEL_TTL_MS) sessionModels.delete(key)
+    }
+    // If still over limit, drop oldest half
+    if (sessionModels.size > SESSION_MODEL_MAX) {
+      const entries = [...sessionModels.entries()].sort((a, b) => a[1].ts - b[1].ts)
+      const toDelete = entries.slice(0, Math.floor(entries.length / 2))
+      for (const [key] of toDelete) sessionModels.delete(key)
+    }
   }
 
   // Auto-recompute estimates periodically
@@ -429,7 +445,8 @@ const plugin = (async (ctx) => {
     // ----------------------------------------------------------
     "chat.params": async ({ sessionID, model, provider }) => {
       try {
-        sessionModels.set(sessionID, { model: model.id, provider: provider.info.id })
+        sessionModels.set(sessionID, { model: model.id, provider: provider.info.id, ts: Date.now() })
+        pruneSessionModels()
         debugLogChatParams(model, provider)
       } catch {
         // Non-critical
