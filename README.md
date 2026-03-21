@@ -1,5 +1,7 @@
 # opencode-copilot-usage-detector
 
+> **Experimental** — This plugin is in early development. Features may change, data formats may evolve, and there will be rough edges. Use at your own risk and please report issues.
+
 An OpenCode plugin that tracks GitHub Copilot token usage across sessions, empirically learns rate limits, and proactively informs you before you hit them.
 
 ## The Problem
