@@ -16,8 +16,19 @@ const processedMessages = new Set<string>()
 // Helpers
 // ============================================================
 
+let configuredTimezone = "UTC"
+
+export function setTimezone(tz: string): void {
+  configuredTimezone = tz
+}
+
 function todayString(): string {
-  return new Date().toISOString().split("T")[0]
+  try {
+    // 'sv' locale gives YYYY-MM-DD format
+    return new Date().toLocaleDateString("sv", { timeZone: configuredTimezone })
+  } catch {
+    return new Date().toISOString().split("T")[0]
+  }
 }
 
 function createEmptyDay(): DailyState {

@@ -27,24 +27,58 @@ This plugin learns these limits from your own usage patterns and warns you as yo
 
 ## Installation
 
+### 1. Install the package
+
 ```bash
-# Install in your OpenCode global config directory
 cd ~/.config/opencode
-npm install opencode-copilot-usage-detector
+npm install git+https://github.com/moodl/opencode-copilot-usage-detector.git
 ```
 
-OpenCode auto-discovers plugins from `~/.config/opencode/node_modules/`. Restart OpenCode after installing.
+### 2. Register the plugin
+
+Add it to your `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "plugin": ["opencode-copilot-usage-detector"]
+}
+```
+
+If you already have other plugins, just add it to the array:
+
+```json
+{
+  "plugin": ["@tarquinen/opencode-dcp@latest", "opencode-copilot-usage-detector"]
+}
+```
+
+### 3. Restart OpenCode
+
+The plugin loads automatically on startup. Use `/budget` to verify it's working.
+
+### Updating
+
+```bash
+cd ~/.config/opencode
+npm install git+https://github.com/moodl/opencode-copilot-usage-detector.git
+```
+
+Then restart OpenCode.
 
 ### Development Install
 
-For local development, install from your repo directory:
+For local development, install from a cloned repo:
 
 ```bash
+git clone https://github.com/moodl/opencode-copilot-usage-detector.git
+cd opencode-copilot-usage-detector
+npm install && npm run build
+
 cd ~/.config/opencode
 npm install /path/to/opencode-copilot-usage-detector
 ```
 
-After making code changes, rebuild and reinstall:
+After code changes, rebuild and reinstall:
 
 ```bash
 # In the plugin repo

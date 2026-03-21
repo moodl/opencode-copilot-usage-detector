@@ -1,7 +1,7 @@
 import { readFileSync, existsSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
-import { execSync } from "node:child_process"
+import { execFileSync } from "node:child_process"
 import type {
   ApiAuthMethod,
   ApiStatus,
@@ -81,7 +81,7 @@ async function tryFetchWithToken(
 
 function tryGhCli(path: string): { ok: boolean; data: unknown } {
   try {
-    const result = execSync(`gh api "${path}"`, {
+    const result = execFileSync("gh", ["api", path], {
       encoding: "utf-8",
       timeout: 10_000,
       stdio: ["pipe", "pipe", "pipe"],

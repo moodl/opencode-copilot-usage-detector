@@ -13,6 +13,7 @@ import {
   processErrorEvent,
   getDaily,
   getCurrentRPM,
+  setTimezone,
 } from "./aggregator.js"
 import {
   ensureDataDir,
@@ -92,11 +93,18 @@ const plugin = (async (ctx) => {
   if (config.debug) {
     enableDebug()
   }
+  if (config.timezone) {
+    setTimezone(config.timezone)
+  }
   recoverFromJSONL()
 
-  // Track the last requested model from chat.params
-  let lastRequestedModel: string | null = null
-  let lastRequestedProvider: string | null = null
+  // Track the last requested model per session (avoids cross-session contamination)
+  const sessionModels = new Map<string, { model: string; provider: string }>()
+
+  function getSessionModel(sessionId: string): { model: string | null; provider: string | null } {
+    const entry = sessionModels.get(sessionId)
+    return entry ? { model: entry.model, provider: entry.provider } : { model: null, provider: null }
+  }
 
   // Auto-recompute estimates periodically
   let usageEventsSinceRecompute = 0
@@ -218,11 +226,12 @@ const plugin = (async (ctx) => {
             cache: { read: 0, write: 0 },
           }
 
+          const sm = getSessionModel(msg.sessionID)
           const incoming: IncomingMessage = {
             messageId: msg.id,
             sessionId: msg.sessionID,
-            modelId: msg.modelID ?? lastRequestedModel ?? "unknown",
-            providerId: msg.providerID ?? lastRequestedProvider ?? "unknown",
+            modelId: msg.modelID ?? sm.model ?? "unknown",
+            providerId: msg.providerID ?? sm.provider ?? "unknown",
             tokens: {
               total: tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write,
               input: tokens.input,
@@ -239,11 +248,11 @@ const plugin = (async (ctx) => {
           maybeRecomputeEstimates()
 
           // Detect silent model fallback
-          if (finished && msg.modelID && lastRequestedModel && msg.modelID !== lastRequestedModel) {
+          if (finished && msg.modelID && sm.model && msg.modelID !== sm.model) {
             appendObservation({
               ts: new Date().toISOString(),
               type: "model_fallback",
-              requested: lastRequestedModel,
+              requested: sm.model,
               received: msg.modelID,
               day_cumulative_tokens: getDaily().totalTokens,
             })
@@ -283,6 +292,7 @@ const plugin = (async (ctx) => {
           const error = errEvent.properties.error
           if (!error) return
           const sessionId = errEvent.properties.sessionID
+          const errSm = getSessionModel(sessionId ?? "")
 
           if (isApiError(error)) {
             const apiErr = error
@@ -303,7 +313,7 @@ const plugin = (async (ctx) => {
                 responseBody: apiErr.data?.responseBody,
               }
 
-              const errorTs = processErrorEvent(incomingError, lastRequestedModel, lastRequestedProvider)
+              const errorTs = processErrorEvent(incomingError, errSm.model, errSm.provider)
               maybeRecomputeEstimates(true)
 
               const d = getDaily()
@@ -315,7 +325,7 @@ const plugin = (async (ctx) => {
               scheduleReclassification(errorTs, () => {
                 const current = getDaily()
                 const recentObs = readRecentObservations(errorTs)
-                const errorModel = lastRequestedModel ?? "unknown"
+                const errorModel = errSm.model ?? "unknown"
                 const otherModels = recentObs
                   .filter((o): o is import("./types.js").UsageEvent => o.type === "usage" && o.model !== errorModel)
                   .map((o) => o.model)
@@ -367,7 +377,7 @@ const plugin = (async (ctx) => {
                   : ""
                 await sendMessage(
                   sessionId,
-                  `\u{1F534} **Rate limited!** Day total: ${formatTokensShort(d.totalTokens)} tokens, ${d.totalRequests} requests | Model: ${lastRequestedModel ?? "unknown"} | Status: ${apiErr.data?.statusCode ?? "unknown"} | Class: ${classification.class}${headerInfo}\n\nRun \`/budget errors\` for details.`
+                  `\u{1F534} **Rate limited!** Day total: ${formatTokensShort(d.totalTokens)} tokens, ${d.totalRequests} requests | Model: ${errSm.model ?? "unknown"} | Status: ${apiErr.data?.statusCode ?? "unknown"} | Class: ${classification.class}${headerInfo}\n\nRun \`/budget errors\` for details.`
                 )
               }
             } else {
@@ -375,8 +385,8 @@ const plugin = (async (ctx) => {
                 ts: new Date().toISOString(),
                 type: "error_logged",
                 session: sessionId ?? "unknown",
-                model: lastRequestedModel ?? "unknown",
-                provider: lastRequestedProvider ?? "unknown",
+                model: errSm.model ?? "unknown",
+                provider: errSm.provider ?? "unknown",
                 error_name: apiErr.name,
                 error_message: apiErr.data?.message ?? "",
                 error_raw: JSON.stringify(apiErr),
@@ -389,8 +399,8 @@ const plugin = (async (ctx) => {
               ts: new Date().toISOString(),
               type: "error_logged",
               session: sessionId ?? "unknown",
-              model: lastRequestedModel ?? "unknown",
-              provider: lastRequestedProvider ?? "unknown",
+              model: errSm.model ?? "unknown",
+              provider: errSm.provider ?? "unknown",
               error_name: (error as any).name ?? "Unknown",
               error_message: (error as any).data?.message ?? "",
               error_raw: JSON.stringify(error),
@@ -417,10 +427,9 @@ const plugin = (async (ctx) => {
     // ----------------------------------------------------------
     // chat.params: capture model/provider before each LLM call
     // ----------------------------------------------------------
-    "chat.params": async ({ model, provider }) => {
+    "chat.params": async ({ sessionID, model, provider }) => {
       try {
-        lastRequestedModel = model.id
-        lastRequestedProvider = provider.info.id
+        sessionModels.set(sessionID, { model: model.id, provider: provider.info.id })
         debugLogChatParams(model, provider)
       } catch {
         // Non-critical

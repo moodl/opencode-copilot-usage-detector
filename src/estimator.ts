@@ -101,7 +101,7 @@ function daysAgo(dateStr: string): number {
 }
 
 function exponentialWeight(daysAgo: number): number {
-  return Math.exp(-daysAgo / DECAY_HALF_LIFE_DAYS)
+  return Math.exp(-daysAgo * Math.LN2 / DECAY_HALF_LIFE_DAYS)
 }
 
 export function weightedMean(values: number[], weights: number[]): number {
@@ -631,7 +631,7 @@ export function getBudgetStatus(
     for (const [model, est] of Object.entries(estimates.models)) {
       if (est.category === "preview" && est.ownLimit) {
         const modelUsage = dailyByModel[model]
-        if (modelUsage) {
+        if (modelUsage && est.ownLimit.value > 0) {
           const pct = Math.round((modelUsage.tokens / est.ownLimit.value) * 100)
           if (pct > 70) {
             previewWarnings.push(
@@ -683,7 +683,7 @@ export function checkThresholds(
   alreadyNotified: Set<number>
 ): number | null {
   if (percentage === null) return null
-  for (const t of thresholds.sort((a, b) => a - b)) {
+  for (const t of [...thresholds].sort((a, b) => a - b)) {
     if (percentage >= t && !alreadyNotified.has(t)) {
       return t
     }
