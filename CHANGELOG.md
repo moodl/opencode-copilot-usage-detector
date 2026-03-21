@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.3 (2026-03-21)
+## 0.1.4 (2026-03-21)
 
 ### Features
 - Toast notifications — rate limit, model blocked, and budget threshold alerts now use non-intrusive TUI toasts instead of conversation messages
