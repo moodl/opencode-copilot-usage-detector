@@ -4,4 +4,5 @@ dist/
 /tmp/
 .env
 PLAN.md
+.claude/
 opencode-dynamic-context-pruning/
