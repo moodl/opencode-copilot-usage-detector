@@ -21,7 +21,7 @@ import {
   readObservations,
   readEstimates,
 } from "./persistence.js"
-import { budgetTool } from "./tools.js"
+import { budgetTool, formatStatus, formatHistory, formatErrors, formatInsights } from "./tools.js"
 import { enableDebug, debugLogEvent, debugLogChatParams } from "./debug.js"
 import {
   classifyErrorImmediate,
@@ -32,7 +32,6 @@ import { getBudgetStatus, checkThresholds, computeEstimates } from "./estimator.
 import {
   pollPremiumRequests,
   getCachedPremiumRequests,
-  getAuthSetupMessage,
   formatPremiumRequestStatus,
 } from "./github-api.js"
 
@@ -84,7 +83,9 @@ function readRecentObservations(sinceTs: string) {
 // Plugin
 // ============================================================
 
-const plugin: Plugin = async ({ client }) => {
+const plugin = (async (ctx) => {
+  const { client } = ctx
+
   // Initialize
   ensureDataDir()
   const config = readConfig()
@@ -120,13 +121,87 @@ const plugin: Plugin = async ({ client }) => {
     }
   }
 
+  // Helper to send a message to the user without triggering a reply
+  async function sendMessage(sessionId: string, text: string): Promise<void> {
+    try {
+      await client.session.prompt({
+        path: { id: sessionId },
+        body: {
+          noReply: true,
+          parts: [{ type: "text", text, ignored: true }],
+        },
+      })
+    } catch {
+      // Notification failure is not critical
+    }
+  }
+
   return {
+    // ----------------------------------------------------------
+    // Config hook: register /budget command
+    // ----------------------------------------------------------
+    config: async (opencodeConfig) => {
+      opencodeConfig.command ??= {}
+      opencodeConfig.command["budget"] = {
+        template: "",
+        description: "Show Copilot budget status, usage history, and insights",
+      }
+    },
+
+    // ----------------------------------------------------------
+    // Command handler: /budget [subcommand]
+    // ----------------------------------------------------------
+    "command.execute.before": async (
+      input: { command: string; sessionID: string; arguments: string },
+      _output: { parts: any[] }
+    ) => {
+      if (input.command !== "budget") return
+
+      const args = (input.arguments || "").trim().split(/\s+/).filter(Boolean)
+      const subcommand = args[0]?.toLowerCase() || "status"
+
+      let result: string
+      switch (subcommand) {
+        case "status":
+          result = formatStatus()
+          break
+        case "history":
+          result = formatHistory(14)
+          break
+        case "insights":
+          result = formatInsights()
+          break
+        case "errors":
+          result = formatErrors()
+          break
+        case "recompute":
+          computeEstimates(
+            config.known_preview_models,
+            config.known_stable_models,
+            config.premium_request_multipliers
+          )
+          result = "Estimates recomputed. Run `/budget insights` to see results."
+          break
+        default:
+          result = [
+            "## /budget commands",
+            "",
+            "- `/budget` or `/budget status` — Current usage and estimates",
+            "- `/budget history` — Daily usage for the last 14 days",
+            "- `/budget insights` — Learned patterns and limit analysis",
+            "- `/budget errors` — Rate limit events and error catalog",
+            "- `/budget recompute` — Force recompute all estimates",
+          ].join("\n")
+      }
+
+      await sendMessage(input.sessionID, result)
+    },
+
     // ----------------------------------------------------------
     // Event handler
     // ----------------------------------------------------------
     event: async ({ event }: { event: Event }) => {
       try {
-        // Debug: log ALL events when debug mode is enabled
         debugLogEvent(event.type, event)
 
         // ----- message.updated: extract tokens from assistant messages -----
@@ -135,7 +210,6 @@ const plugin: Plugin = async ({ client }) => {
           const msg = msgEvent.properties.info
           if (!isAssistantMessage(msg)) return
 
-          // Only process if the message has a finish reason (completed)
           const finished = !!msg.finish
           const tokens = msg.tokens ?? {
             input: 0,
@@ -175,54 +249,30 @@ const plugin: Plugin = async ({ client }) => {
             })
           }
 
-          // Check threshold notifications after processing
+          // Check threshold notifications
           if (finished && !config.quiet_mode) {
             const d = getDaily()
             const status = getBudgetStatus(
-              d.totalTokens,
-              d.totalRequests,
-              d.totalCost,
-              d.byModel,
-              d.limitHits.length,
-              config.known_preview_models,
-              config.known_stable_models,
-              config.premium_request_multipliers
+              d.totalTokens, d.totalRequests, d.totalCost, d.byModel,
+              d.limitHits.length, config.known_preview_models,
+              config.known_stable_models, config.premium_request_multipliers
             )
 
             const threshold = checkThresholds(
-              status.percentage,
-              config.notification_thresholds,
-              d.notifiedThresholds
+              status.percentage, config.notification_thresholds, d.notifiedThresholds
             )
 
             if (threshold !== null) {
               d.notifiedThresholds.add(threshold)
-              try {
-                const pctStr = status.percentage !== null ? `${status.percentage}%` : "?"
-                const limitStr = status.estimatedTokenLimit
-                  ? formatTokensShort(status.estimatedTokenLimit)
-                  : "unknown"
-                const confStr = status.confidence > 0.8
-                  ? ""
-                  : status.confidence > 0.5
-                    ? " (moderate confidence)"
-                    : " (low confidence)"
-
-                await client.session.promptAsync({
-                  path: { id: msg.sessionID },
-                  body: {
-                    noReply: true,
-                    parts: [
-                      {
-                        type: "text",
-                        text: `\u{26A1} **${pctStr} of daily Copilot budget used** (${formatTokensShort(d.totalTokens)} / ~${limitStr} est.)${confStr}`,
-                      },
-                    ],
-                  },
-                })
-              } catch {
-                // Notification failure is not critical
-              }
+              const pctStr = status.percentage !== null ? `${status.percentage}%` : "?"
+              const limitStr = status.estimatedTokenLimit
+                ? formatTokensShort(status.estimatedTokenLimit) : "unknown"
+              const confStr = status.confidence > 0.8 ? ""
+                : status.confidence > 0.5 ? " (moderate confidence)" : " (low confidence)"
+              await sendMessage(
+                msg.sessionID,
+                `\u{26A1} **${pctStr} of daily Copilot budget used** (${formatTokensShort(d.totalTokens)} / ~${limitStr} est.)${confStr}`
+              )
             }
           }
         }
@@ -238,13 +288,10 @@ const plugin: Plugin = async ({ client }) => {
             const apiErr = error
             const rateLimitHeaders = extractRateLimitHeaders(apiErr.data?.responseHeaders)
             const classification = classifyErrorImmediate(
-              apiErr.data?.message ?? "",
-              apiErr.data?.statusCode,
-              apiErr.data?.responseHeaders
+              apiErr.data?.message ?? "", apiErr.data?.statusCode, apiErr.data?.responseHeaders
             )
 
             if (isRateLimitError(apiErr)) {
-              // This looks like a rate limit — log as limit_hit
               const incomingError: IncomingError = {
                 sessionId,
                 errorName: apiErr.name,
@@ -257,16 +304,14 @@ const plugin: Plugin = async ({ client }) => {
               }
 
               const errorTs = processErrorEvent(incomingError, lastRequestedModel, lastRequestedProvider)
-              maybeRecomputeEstimates(true) // Force recompute after limit hits
+              maybeRecomputeEstimates(true)
 
-              // Override the default "unknown" class with classifier result
               const d = getDaily()
               if (d.limitHits.length > 0) {
                 d.limitHits[d.limitHits.length - 1].class = classification.class
               }
 
               // Schedule delayed reclassification (10 min after event)
-              // Delay allows cross-model correlation and recovery detection
               scheduleReclassification(errorTs, () => {
                 const current = getDaily()
                 const recentObs = readRecentObservations(errorTs)
@@ -315,30 +360,17 @@ const plugin: Plugin = async ({ client }) => {
                 }
               })
 
-              // Notify user about rate limit
+              // Notify user
               if (sessionId) {
                 const headerInfo = rateLimitHeaders
                   ? ` | Headers: ${Object.entries(rateLimitHeaders.all).map(([k, v]) => `${k}=${v}`).join(", ")}`
                   : ""
-                try {
-                  await client.session.promptAsync({
-                    path: { id: sessionId },
-                    body: {
-                      noReply: true,
-                      parts: [
-                        {
-                          type: "text",
-                          text: `\u{1F534} **Rate limited!** Day total: ${formatTokensShort(d.totalTokens)} tokens, ${d.totalRequests} requests | Model: ${lastRequestedModel ?? "unknown"} | Status: ${apiErr.data?.statusCode ?? "unknown"} | Class: ${classification.class}${headerInfo}\n\nRun \`/budget errors\` for details.`,
-                        },
-                      ],
-                    },
-                  })
-                } catch {
-                  // Notification failure is not critical
-                }
+                await sendMessage(
+                  sessionId,
+                  `\u{1F534} **Rate limited!** Day total: ${formatTokensShort(d.totalTokens)} tokens, ${d.totalRequests} requests | Model: ${lastRequestedModel ?? "unknown"} | Status: ${apiErr.data?.statusCode ?? "unknown"} | Class: ${classification.class}${headerInfo}\n\nRun \`/budget errors\` for details.`
+                )
               }
             } else {
-              // Non-rate-limit API error — log for catalog building
               appendObservation({
                 ts: new Date().toISOString(),
                 type: "error_logged",
@@ -353,7 +385,6 @@ const plugin: Plugin = async ({ client }) => {
               })
             }
           } else {
-            // Non-API error (ProviderAuthError, UnknownError, etc.) — log for catalog
             appendObservation({
               ts: new Date().toISOString(),
               type: "error_logged",
@@ -369,7 +400,6 @@ const plugin: Plugin = async ({ client }) => {
           }
         }
       } catch (err) {
-        // Plugin errors must NEVER crash OpenCode
         try {
           await client.app.log({
             body: {
@@ -405,28 +435,18 @@ const plugin: Plugin = async ({ client }) => {
         const d = getDaily()
         const rpm = getCurrentRPM()
         const status = getBudgetStatus(
-          d.totalTokens,
-          d.totalRequests,
-          d.totalCost,
-          d.byModel,
-          d.limitHits.length,
-          config.known_preview_models,
-          config.known_stable_models,
-          config.premium_request_multipliers
+          d.totalTokens, d.totalRequests, d.totalCost, d.byModel,
+          d.limitHits.length, config.known_preview_models,
+          config.known_stable_models, config.premium_request_multipliers
         )
 
-        // Poll GitHub API for premium request data (respects 15-min interval)
         const pr = await pollPremiumRequests(config).catch(() => getCachedPremiumRequests())
-        const premiumLine = pr
-          ? formatPremiumRequestStatus(pr)
-          : ""
+        const premiumLine = pr ? formatPremiumRequestStatus(pr) : ""
 
         const limitLine = status.estimatedTokenLimit
           ? `Estimated daily limit: ~${formatTokensShort(status.estimatedTokenLimit)} tokens (confidence: ${Math.round(status.confidence * 100)}%)`
           : "Estimated daily limit: unknown (still learning)"
-        const pctLine = status.percentage !== null
-          ? `Usage percentage: ~${status.percentage}%`
-          : ""
+        const pctLine = status.percentage !== null ? `Usage percentage: ~${status.percentage}%` : ""
         const limitHitLine = d.limitHits.length > 0
           ? `Limit hits today: ${d.limitHits.length} (last at ${d.limitHits[d.limitHits.length - 1]?.ts.split("T")[1]?.split(".")[0] ?? "?"})`
           : ""
@@ -450,7 +470,7 @@ ${limitHitLine}${previewLine}${insightLine}
     },
 
     // ----------------------------------------------------------
-    // Session compaction: preserve budget context
+    // Session compaction
     // ----------------------------------------------------------
     "experimental.session.compacting": async (_input, output) => {
       try {
@@ -464,12 +484,12 @@ ${limitHitLine}${previewLine}${insightLine}
     },
 
     // ----------------------------------------------------------
-    // Custom tool
+    // Custom tool (for LLM to call)
     // ----------------------------------------------------------
     tool: {
       budget: budgetTool,
     },
   }
-}
+}) satisfies Plugin
 
 export default plugin

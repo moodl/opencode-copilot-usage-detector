@@ -28,16 +28,34 @@ This plugin learns these limits from your own usage patterns and warns you as yo
 ## Installation
 
 ```bash
-# In your OpenCode global config directory
+# Install in your OpenCode global config directory
 cd ~/.config/opencode
-
-# Add the plugin
-npm install /path/to/opencode-copilot-usage-detector
-# or from npm (when published):
-# npm install opencode-copilot-usage-detector
+npm install opencode-copilot-usage-detector
 ```
 
-The plugin is automatically loaded by OpenCode on next restart.
+OpenCode auto-discovers plugins from `~/.config/opencode/node_modules/`. Restart OpenCode after installing.
+
+### Development Install
+
+For local development, install from your repo directory:
+
+```bash
+cd ~/.config/opencode
+npm install /path/to/opencode-copilot-usage-detector
+```
+
+After making code changes, rebuild and reinstall:
+
+```bash
+# In the plugin repo
+npm run build
+
+# In the OpenCode config dir
+cd ~/.config/opencode
+npm install /path/to/opencode-copilot-usage-detector
+```
+
+Then restart OpenCode to pick up changes.
 
 ## Usage
 

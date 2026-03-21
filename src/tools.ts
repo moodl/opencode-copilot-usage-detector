@@ -10,7 +10,7 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
-function formatStatus(): string {
+export function formatStatus(): string {
   const d = getDaily()
   const rpm = getCurrentRPM()
   const config = readConfig()
@@ -124,7 +124,7 @@ function formatStatus(): string {
   return lines.join("\n")
 }
 
-function formatHistory(days: number): string {
+export function formatHistory(days: number): string {
   const dayEnds = readObservations({ type: "day_end" })
   const recent = dayEnds.slice(-days)
 
@@ -150,7 +150,7 @@ function formatHistory(days: number): string {
   return lines.join("\n")
 }
 
-function formatErrors(): string {
+export function formatErrors(): string {
   const limitHits = readObservations({ type: "limit_hit" })
   const reclassifications = readObservations({ type: "reclassify" })
   const errorLogs = readObservations({ type: "error_logged" })
@@ -213,7 +213,7 @@ function formatErrors(): string {
   return lines.join("\n")
 }
 
-function formatInsights(): string {
+export function formatInsights(): string {
   const config = readConfig()
   const estimates = computeEstimates(
     config.known_preview_models,
