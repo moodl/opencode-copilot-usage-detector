@@ -111,10 +111,7 @@ function maybeRotateJsonl(): void {
         const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
         const recent = allObs.filter((e) => e.ts >= cutoff)
 
-        const archivePath = join(
-          DATA_DIR,
-          `observations.${new Date().toISOString().split("T")[0]}.archive.jsonl`
-        )
+        const archivePath = safeArchivePath("archive")
         renameSync(OBSERVATIONS_FILE, archivePath)
 
         // Write back only recent events
@@ -128,12 +125,22 @@ function maybeRotateJsonl(): void {
   }
 }
 
+function safeArchivePath(reason: string): string {
+  // Use full ISO timestamp (colons replaced for filesystem safety) to avoid collisions
+  const ts = new Date().toISOString().replace(/:/g, "-")
+  let path = join(DATA_DIR, `observations.${ts}.${reason}.jsonl`)
+  // If somehow exists (very unlikely with millisecond timestamps), add a counter
+  let counter = 1
+  while (existsSync(path)) {
+    path = join(DATA_DIR, `observations.${ts}.${reason}.${counter}.jsonl`)
+    counter++
+  }
+  return path
+}
+
 function rotateJsonl(reason: string): void {
   try {
-    const archivePath = join(
-      DATA_DIR,
-      `observations.${new Date().toISOString().split("T")[0]}.${reason}.jsonl`
-    )
+    const archivePath = safeArchivePath(reason)
     renameSync(OBSERVATIONS_FILE, archivePath)
   } catch {
     // Archive failure is not critical
@@ -153,7 +160,7 @@ export function readEstimates(): Record<string, unknown> | null {
   }
 }
 
-export function writeEstimates(data: Record<string, unknown>): void {
+export function writeEstimates(data: Record<string, unknown> | object): void {
   if (!writable) return
   try {
     ensureDataDir()

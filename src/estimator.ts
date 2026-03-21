@@ -132,6 +132,9 @@ function baseConfidence(dataPoints: number): number {
 
 function confidenceWithDecay(dataPoints: number, daysSinceLastHit: number): number {
   const base = baseConfidence(dataPoints)
+  if (!isFinite(daysSinceLastHit) || daysSinceLastHit > DECAY_MAX_DAYS) {
+    return base * 0.3
+  }
   const decayFactor = Math.max(0.3, 1.0 - daysSinceLastHit / DECAY_MAX_DAYS)
   return base * decayFactor
 }
@@ -298,7 +301,7 @@ export function computeEstimates(
     // Calculate average tokens per day for this model
     const modelDays = new Set(modelUsage.map((e) => e.ts.split("T")[0]))
     const modelTokensTotal = modelUsage.reduce(
-      (sum, e) => sum + (e.type === "usage" ? e.input_tokens + e.output_tokens : 0),
+      (sum, e) => sum + (e.type === "usage" ? e.input_tokens + e.output_tokens + e.reasoning_tokens + e.cache_read + e.cache_write : 0),
       0
     )
     const avgTokensPerDay = modelDays.size > 0 ? modelTokensTotal / modelDays.size : 0
@@ -562,7 +565,7 @@ export function computeEstimates(
   }
 
   // Persist
-  writeEstimates(estimates as unknown as Record<string, unknown>)
+  writeEstimates(estimates)
 
   return estimates
 }

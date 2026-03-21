@@ -233,13 +233,14 @@ export function processErrorEvent(
   err: IncomingError,
   lastRequestedModel: string | null,
   lastRequestedProvider: string | null
-): void {
+): string {
   checkDayRollover()
 
   const rpm = getCurrentRPM()
+  const ts = new Date().toISOString()
 
   appendObservation({
-    ts: new Date().toISOString(),
+    ts,
     type: "limit_hit",
     session: err.sessionId ?? "unknown",
     model: lastRequestedModel ?? "unknown",
@@ -258,7 +259,7 @@ export function processErrorEvent(
   })
 
   daily.limitHits.push({
-    ts: new Date().toISOString(),
+    ts,
     model: lastRequestedModel ?? "unknown",
     class: "unknown",
     tokensAtHit: daily.totalTokens,
@@ -268,13 +269,15 @@ export function processErrorEvent(
 
   daily.inLimitState = true
   daily.lastLimitHitTs = Date.now()
+
+  return ts
 }
 
 // ============================================================
 // Getters for other modules
 // ============================================================
 
-export function getDaily(): Readonly<DailyState> {
+export function getDaily(): DailyState {
   checkDayRollover()
   return daily
 }

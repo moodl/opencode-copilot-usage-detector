@@ -91,6 +91,29 @@ const plugin: Plugin = async ({ client }) => {
   let lastRequestedModel: string | null = null
   let lastRequestedProvider: string | null = null
 
+  // Auto-recompute estimates periodically
+  let usageEventsSinceRecompute = 0
+  const RECOMPUTE_EVERY_N_EVENTS = 50
+  let lastRecomputeTime = 0
+  const RECOMPUTE_INTERVAL_MS = 60 * 60 * 1000 // 1 hour
+
+  function maybeRecomputeEstimates(force = false): void {
+    const now = Date.now()
+    if (force || usageEventsSinceRecompute >= RECOMPUTE_EVERY_N_EVENTS || now - lastRecomputeTime > RECOMPUTE_INTERVAL_MS) {
+      try {
+        computeEstimates(
+          config.known_preview_models,
+          config.known_stable_models,
+          config.premium_request_multipliers
+        )
+        usageEventsSinceRecompute = 0
+        lastRecomputeTime = now
+      } catch {
+        // Recompute failure is not critical
+      }
+    }
+  }
+
   return {
     // ----------------------------------------------------------
     // Event handler
@@ -132,6 +155,8 @@ const plugin: Plugin = async ({ client }) => {
           }
 
           processAssistantMessage(incoming)
+          usageEventsSinceRecompute++
+          maybeRecomputeEstimates()
 
           // Detect silent model fallback
           if (finished && msg.modelID && lastRequestedModel && msg.modelID !== lastRequestedModel) {
@@ -225,7 +250,8 @@ const plugin: Plugin = async ({ client }) => {
                 responseBody: apiErr.data?.responseBody,
               }
 
-              processErrorEvent(incomingError, lastRequestedModel, lastRequestedProvider)
+              const errorTs = processErrorEvent(incomingError, lastRequestedModel, lastRequestedProvider)
+              maybeRecomputeEstimates(true) // Force recompute after limit hits
 
               // Override the default "unknown" class with classifier result
               const d = getDaily()
@@ -233,15 +259,15 @@ const plugin: Plugin = async ({ client }) => {
                 d.limitHits[d.limitHits.length - 1].class = classification.class
               }
 
-              // Schedule delayed reclassification
-              const errorTs = new Date().toISOString()
+              // Schedule delayed reclassification (10 min after event)
+              // Delay allows cross-model correlation and recovery detection
               scheduleReclassification(errorTs, () => {
                 const current = getDaily()
                 const recentObs = readRecentObservations(errorTs)
                 const errorModel = lastRequestedModel ?? "unknown"
                 const otherModels = recentObs
-                  .filter((o) => o.type === "usage" && o.model !== errorModel)
-                  .map((o) => (o as any).model as string)
+                  .filter((o): o is import("./types.js").UsageEvent => o.type === "usage" && o.model !== errorModel)
+                  .map((o) => o.model)
                 const uniqueOtherModels = [...new Set(otherModels)]
                 const totalRecent = recentObs.length
                 const errorRecent = recentObs.filter((o) => o.type === "limit_hit").length
@@ -253,7 +279,7 @@ const plugin: Plugin = async ({ client }) => {
                 return {
                   recentObservations: recentObs.map((o) => ({
                     type: o.type,
-                    model: "model" in o ? (o as any).model : undefined,
+                    model: "model" in o ? String((o as unknown as Record<string, unknown>).model) : undefined,
                     ts: o.ts,
                   })),
                   dailyTokens: current.totalTokens,
@@ -261,7 +287,17 @@ const plugin: Plugin = async ({ client }) => {
                   globalEstimate: (() => {
                     try {
                       const est = readEstimates()
-                      return (est as any)?.globalDailyBudget?.tokenEstimate?.value ?? null
+                      if (est && typeof est === "object") {
+                        const gdb = (est as Record<string, unknown>).globalDailyBudget
+                        if (gdb && typeof gdb === "object") {
+                          const te = (gdb as Record<string, unknown>).tokenEstimate
+                          if (te && typeof te === "object") {
+                            const val = (te as Record<string, unknown>).value
+                            return typeof val === "number" ? val : null
+                          }
+                        }
+                      }
+                      return null
                     } catch { return null }
                   })(),
                   otherModelsWorking: uniqueOtherModels.length > 0,
