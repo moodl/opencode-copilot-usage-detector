@@ -1,5 +1,9 @@
 # opencode-copilot-usage-detector
 
+[![npm version](https://img.shields.io/npm/v/opencode-copilot-usage-detector)](https://www.npmjs.com/package/opencode-copilot-usage-detector)
+[![CI](https://github.com/moodl/opencode-copilot-usage-detector/actions/workflows/ci.yml/badge.svg)](https://github.com/moodl/opencode-copilot-usage-detector/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 > **Experimental** — This plugin is in early development. Features may change, data formats may evolve, and there will be rough edges. Use at your own risk and please [report issues](https://github.com/moodl/opencode-copilot-usage-detector/issues).
 
 An [OpenCode](https://opencode.ai) plugin that tracks GitHub Copilot token usage across sessions, empirically learns rate limits, and proactively informs you before you hit them.
@@ -40,7 +44,7 @@ This plugin learns these limits from your own usage patterns and warns you as yo
 
 ```bash
 cd ~/.config/opencode
-npm install git+https://github.com/moodl/opencode-copilot-usage-detector.git
+npm install opencode-copilot-usage-detector
 ```
 
 ### 2. Register the plugin
@@ -69,7 +73,7 @@ The plugin loads automatically on startup. Use `/budget` to verify it's working.
 
 ```bash
 cd ~/.config/opencode
-npm install git+https://github.com/moodl/opencode-copilot-usage-detector.git
+npm install opencode-copilot-usage-detector@latest
 ```
 
 Then restart OpenCode.
