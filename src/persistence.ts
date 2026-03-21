@@ -181,13 +181,70 @@ export function writeEstimates(data: Record<string, unknown> | object): void {
 // config.json
 // ============================================================
 
-export function readConfig(): PluginConfig {
-  if (!existsSync(CONFIG_FILE)) return { ...DEFAULT_CONFIG }
+function validateConfig(raw: Record<string, unknown>): { config: Partial<PluginConfig>; warnings: string[] } {
+  const warnings: string[] = []
+  const config: Record<string, unknown> = {}
+
+  const typeChecks: Record<string, string> = {
+    debug: "boolean",
+    copilot_plan: "string",
+    timezone: "string",
+    quiet_mode: "boolean",
+    monthly_premium_allowance: "number",
+  }
+
+  const arrayChecks = ["known_preview_models", "known_stable_models", "notification_thresholds"]
+  const objectChecks = ["premium_request_multipliers"]
+
+  for (const [key, expectedType] of Object.entries(typeChecks)) {
+    if (key in raw) {
+      if (typeof raw[key] !== expectedType) {
+        warnings.push(`config.${key} should be ${expectedType}, got ${typeof raw[key]}`)
+      } else {
+        config[key] = raw[key]
+      }
+    }
+  }
+
+  for (const key of arrayChecks) {
+    if (key in raw) {
+      if (!Array.isArray(raw[key])) {
+        warnings.push(`config.${key} should be an array`)
+      } else {
+        config[key] = raw[key]
+      }
+    }
+  }
+
+  for (const key of objectChecks) {
+    if (key in raw) {
+      if (typeof raw[key] !== "object" || raw[key] === null || Array.isArray(raw[key])) {
+        warnings.push(`config.${key} should be an object`)
+      } else {
+        config[key] = raw[key]
+      }
+    }
+  }
+
+  // Warn on unknown keys
+  const knownKeys = new Set(Object.keys(DEFAULT_CONFIG))
+  for (const key of Object.keys(raw)) {
+    if (!knownKeys.has(key)) {
+      warnings.push(`unknown config key: "${key}"`)
+    }
+  }
+
+  return { config: config as Partial<PluginConfig>, warnings }
+}
+
+export function readConfig(): { config: PluginConfig; warnings: string[] } {
+  if (!existsSync(CONFIG_FILE)) return { config: { ...DEFAULT_CONFIG }, warnings: [] }
   try {
-    const raw = JSON.parse(readFileSync(CONFIG_FILE, "utf-8")) as Partial<PluginConfig>
-    return { ...DEFAULT_CONFIG, ...raw }
+    const raw = JSON.parse(readFileSync(CONFIG_FILE, "utf-8")) as Record<string, unknown>
+    const { config, warnings } = validateConfig(raw)
+    return { config: { ...DEFAULT_CONFIG, ...config }, warnings }
   } catch {
-    return { ...DEFAULT_CONFIG }
+    return { config: { ...DEFAULT_CONFIG }, warnings: ["config.json: failed to parse JSON"] }
   }
 }
 
@@ -227,11 +284,13 @@ export function removeObservations(filter: {
   before?: string
   after?: string
   class?: string
+  predicate?: (e: ObservationEvent) => boolean
 }): number {
   if (!existsSync(OBSERVATIONS_FILE)) return 0
   try {
     const all = readObservations()
     const kept = all.filter((e) => {
+      if (filter.predicate && filter.predicate(e)) return false
       if (filter.type && e.type === filter.type) return false
       if (filter.before && e.ts < filter.before) return false
       if (filter.after && e.ts > filter.after) return false

@@ -39,12 +39,7 @@ import {
   getCachedPremiumRequests,
   formatPremiumRequestStatus,
 } from "./github-api.js"
-
-// ============================================================
-// Constants
-// ============================================================
-
-const COMMAND_HANDLED_SENTINEL = "__BUDGET_COMMAND_HANDLED__"
+import { handled } from "./command-handled.js"
 
 // ============================================================
 // Helpers
@@ -139,7 +134,7 @@ const plugin = (async (ctx) => {
 
   // Initialize
   ensureDataDir()
-  const config = readConfig()
+  const { config, warnings: configWarnings } = readConfig()
   if (config.debug) {
     enableDebug()
   }
@@ -147,6 +142,16 @@ const plugin = (async (ctx) => {
     setTimezone(config.timezone)
   }
   recoverFromJSONL()
+
+  // Log config warnings
+  for (const w of configWarnings) {
+    try {
+      client.app.log({ body: { service: "copilot-budget", level: "warn", message: `Config: ${w}` } })
+    } catch { /* */ }
+  }
+
+  // Cache whether a session is a subagent (avoids repeated API calls)
+  const subagentCache = new Map<string, boolean>()
 
   // Track the last requested model per session (avoids cross-session contamination)
   const sessionModels = new Map<string, { model: string; provider: string; ts: number }>()
@@ -207,6 +212,19 @@ const plugin = (async (ctx) => {
       })
     } catch {
       // Notification failure is not critical
+    }
+  }
+
+  // Non-intrusive toast notification (doesn't pollute conversation)
+  async function showToast(
+    title: string,
+    message: string,
+    variant: "info" | "success" | "warning" | "error" = "info"
+  ): Promise<void> {
+    try {
+      await client.tui.showToast({ body: { title, message, variant, duration: 5000 } })
+    } catch {
+      // Toast failure is not critical
     }
   }
 
@@ -276,6 +294,7 @@ const plugin = (async (ctx) => {
               "- `/budget clean errors` — Remove all error_logged entries",
               "- `/budget clean blocked` — Remove all model_blocked entries",
               "- `/budget clean limit_hits` — Remove all limit_hit entries",
+              "- `/budget clean fake_hits` — Remove limit_hits from models with no usage (blocked models misrecorded as rate limits)",
               "- `/budget clean model <name>` — Remove all entries for a specific model",
               "- `/budget clean before <date>` — Remove entries before a date (YYYY-MM-DD)",
               "",
@@ -294,6 +313,18 @@ const plugin = (async (ctx) => {
               case "limit_hits":
                 removed = removeObservations({ type: "limit_hit" })
                 break
+              case "fake_hits": {
+                // Remove limit_hits from models that have no successful usage — these are
+                // blocked models that were misrecorded as rate limits by the old code
+                const d = getDaily()
+                removed = removeObservations({
+                  predicate: (e) =>
+                    e.type === "limit_hit" &&
+                    "model" in e &&
+                    !d.byModel[(e as any).model],
+                })
+                break
+              }
               case "model": {
                 const modelName = args[2]
                 if (!modelName) {
@@ -352,7 +383,7 @@ const plugin = (async (ctx) => {
       // the command flow before OpenCode invokes the LLM.
       // This is the standard pattern used by opencode-quota, DCP, etc.
       await sendMessage(input.sessionID, result)
-      throw new Error(COMMAND_HANDLED_SENTINEL)
+      handled()
     },
 
     // ----------------------------------------------------------
@@ -428,9 +459,10 @@ const plugin = (async (ctx) => {
                 ? formatTokensShort(status.estimatedTokenLimit) : "unknown"
               const confStr = status.confidence > 0.8 ? ""
                 : status.confidence > 0.5 ? " (moderate confidence)" : " (low confidence)"
-              await sendMessage(
-                msg.sessionID,
-                `\u{26A1} **${pctStr} of daily Copilot budget used** (${formatTokensShort(d.totalTokens)} / ~${limitStr} est.)${confStr}`
+              await showToast(
+                "Budget Warning",
+                `${pctStr} of daily budget used (${formatTokensShort(d.totalTokens)} / ~${limitStr} est.)${confStr}`,
+                "warning"
               )
             }
           }
@@ -480,10 +512,11 @@ const plugin = (async (ctx) => {
               })
 
               // Only notify once per model per day
-              if (sessionId && !alreadyNotified) {
-                await sendMessage(
-                  sessionId,
-                  `\u{1F6AB} **Model blocked:** ${errModel} is not available on your plan (status: ${apiErr.data?.statusCode ?? "unknown"}). This won't count toward rate limit estimates.`
+              if (!alreadyNotified) {
+                await showToast(
+                  "Model Blocked",
+                  `${errModel} is not available on your plan (status: ${apiErr.data?.statusCode ?? "unknown"})`,
+                  "warning"
                 )
               }
             }
@@ -574,16 +607,12 @@ const plugin = (async (ctx) => {
                 }
               })
 
-              // Notify user
-              if (sessionId) {
-                const headerInfo = rateLimitHeaders
-                  ? ` | Headers: ${Object.entries(rateLimitHeaders.all).map(([k, v]) => `${k}=${v}`).join(", ")}`
-                  : ""
-                await sendMessage(
-                  sessionId,
-                  `\u{1F534} **Rate limited!** Day total: ${formatTokensShort(d.totalTokens)} tokens, ${d.totalRequests} requests | Model: ${errSm.model ?? "unknown"} | Status: ${apiErr.data?.statusCode ?? "unknown"} | Class: ${classification.class}${headerInfo}\n\nRun \`/budget errors\` for details.`
-                )
-              }
+              // Notify user via toast (non-intrusive)
+              await showToast(
+                "Rate Limited",
+                `${formatTokensShort(d.totalTokens)} tokens, ${d.totalRequests} req | ${errSm.model ?? "unknown"} | ${classification.class}`,
+                "error"
+              )
             } else {
               appendObservation({
                 ts: new Date().toISOString(),
@@ -644,8 +673,21 @@ const plugin = (async (ctx) => {
     // ----------------------------------------------------------
     // System prompt injection
     // ----------------------------------------------------------
-    "experimental.chat.system.transform": async (_input, output) => {
+    "experimental.chat.system.transform": async (input, output) => {
       try {
+        // Skip injection for subagent sessions to save tokens
+        if (input.sessionID) {
+          if (!subagentCache.has(input.sessionID)) {
+            try {
+              const session = await client.session.get({ path: { id: input.sessionID } })
+              subagentCache.set(input.sessionID, !!session.data?.parentID)
+            } catch {
+              subagentCache.set(input.sessionID, false)
+            }
+          }
+          if (subagentCache.get(input.sessionID)) return
+        }
+
         const d = getDaily()
         const rpm = getCurrentRPM()
         const status = getBudgetStatus(

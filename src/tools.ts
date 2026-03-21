@@ -13,7 +13,7 @@ function formatTokens(n: number): string {
 export function formatStatus(): string {
   const d = getDaily()
   const rpm = getCurrentRPM()
-  const config = readConfig()
+  const { config } = readConfig()
   const status = getBudgetStatus(
     d.totalTokens,
     d.totalRequests,
@@ -241,7 +241,7 @@ export function formatErrors(): string {
 }
 
 export function formatInsights(): string {
-  const config = readConfig()
+  const { config } = readConfig()
   const estimates = computeEstimates(
     config.known_preview_models,
     config.known_stable_models,
@@ -343,7 +343,7 @@ export const budgetTool = tool({
       case "errors":
         return formatErrors()
       case "recompute": {
-        const config = readConfig()
+        const { config } = readConfig()
         computeEstimates(
           config.known_preview_models,
           config.known_stable_models,

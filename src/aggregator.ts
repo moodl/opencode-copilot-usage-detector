@@ -127,16 +127,27 @@ export function recoverFromJSONL(): void {
       m.requests += 1
     }
     if (event.type === "limit_hit") {
-      daily.limitHits.push({
-        ts: event.ts,
-        model: event.model,
-        class: event.class,
-        tokensAtHit: event.day_cumulative_tokens,
-        requestsAtHit: event.day_cumulative_requests,
-        rpmAtHit: event.requests_last_minute,
-      })
-      daily.inLimitState = true
-      daily.lastLimitHitTs = new Date(event.ts).getTime()
+      // Retroactive blocked detection: if the model has no usage today, it's blocked, not rate limited
+      const modelUsage = daily.byModel[event.model]
+      if (!modelUsage || (modelUsage.tokens === 0 && modelUsage.requests === 0)) {
+        daily.blockedModels.push({
+          ts: event.ts,
+          model: event.model,
+          errorMessage: event.error_message,
+          statusCode: event.status_code,
+        })
+      } else {
+        daily.limitHits.push({
+          ts: event.ts,
+          model: event.model,
+          class: event.class,
+          tokensAtHit: event.day_cumulative_tokens,
+          requestsAtHit: event.day_cumulative_requests,
+          rpmAtHit: event.requests_last_minute,
+        })
+        daily.inLimitState = true
+        daily.lastLimitHitTs = new Date(event.ts).getTime()
+      }
     }
     if (event.type === "model_blocked") {
       daily.blockedModels.push({
