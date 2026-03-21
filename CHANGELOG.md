@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.1.1 (2026-03-21)
+
+### Features
+- `/budget reset` — wipe today's data and start fresh
+- `/budget clean [target]` — selectively remove entries (errors, blocked, limit_hits, model, before date)
+- Model blocked detection — identifies models not available on your plan (403/access denied)
+- Blocked models shown in status, system prompt, and insights
+
+### Fixes
+- Fix command injection: use `execFileSync` instead of `execSync` (github-api.ts)
+- Fix cross-session model tracking: per-session Map instead of global variables
+- Fix half-life formula: correct 14-day decay using `ln(2)`
+- Fix division by zero in preview warning when `ownLimit.value` is 0
+- Fix `checkThresholds` mutating source config array
+- Fix JSONL rotation: atomic writes via temp file with rollback on failure
+- Fix `toLocaleDateString` validation for minimal-ICU Node.js builds
+- Fix `day_end` timestamp: drop hardcoded `Z` suffix for timezone consistency
+- Fix `sessionModels` Map: TTL-based pruning prevents unbounded growth
+- Fix reclassification timers: `unref()` so they don't block process exit
+- Fix test glob for CI: use `find` for cross-platform compatibility
+
+### Infrastructure
+- GitHub Actions CI (Node 18/20/22)
+- npm publish via trusted publishing on GitHub release
+- 144 tests across 8 test files
+- npm/CI/license badges in README
+
 ## 0.1.0 (2026-03-21)
 
 Initial release.
