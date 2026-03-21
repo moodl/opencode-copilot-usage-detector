@@ -93,6 +93,106 @@ The plugin works automatically -- no action needed. It:
 | `/budget errors` | Rate limit events and error catalog |
 | `/budget recompute` | Force recompute all estimates from observations |
 
+### Example: `/budget status`
+
+```
+## Copilot Budget Status — 2026-03-21
+
+### Monthly Premium Requests
+Premium requests this month: 147 / 300 (49% used, 153 remaining)
+  claude-opus-4.5: 89 requests
+  gpt-5.4-mini: 58 requests
+*Last updated: 2026-03-21T14:30:00Z*
+
+**Total tokens today:** 1.8M
+**Total requests today:** 67
+**Total cost today:** $0.0000
+**Current RPM:** 3 req/min (peak: 7)
+
+**Estimated daily token limit:** ~2.9M (82% confidence)
+**Usage:** ~63%
+**Limit type:** tokens
+
+### Model Breakdown
+
+| Model            | Tokens | Requests | Category |
+|------------------|--------|----------|----------|
+| claude-opus-4.5  | 1.4M   | 42       | stable   |
+| gpt-5.4-mini     | 422K   | 25       | stable   |
+```
+
+### Example: System Prompt Injection
+
+Every LLM response automatically sees this context (no tool call needed):
+
+```xml
+<copilot-budget>
+Premium requests this month: 147 / 300 (49% used, 153 remaining)
+Daily token usage: 1.8M tokens (67 requests)
+Estimated daily limit: ~2.9M tokens (confidence: 82%)
+Usage percentage: ~63%
+Cost today: $0.0000
+Current rate: 3 req/min (peak: 7)
+
+Model breakdown:
+  claude-opus-4.5: 1.4M tokens / 42 requests (stable)
+  gpt-5.4-mini: 422K tokens / 25 requests (stable)
+</copilot-budget>
+```
+
+### Example: Threshold Notification
+
+When approaching a learned limit, you'll see a chat message like:
+
+```
+⚡ 80% of daily Copilot budget used (2.3M / ~2.9M est.)
+```
+
+### Example: Rate Limit Alert
+
+```
+🔴 Rate limited! Day total: 2.8M tokens, 142 requests
+   Model: claude-opus-4.5 | Status: 429 | Class: hard_daily_limit
+   Run `/budget errors` for details.
+```
+
+### Example: `/budget insights`
+
+After accumulating data over several days:
+
+```
+## Copilot Budget Insights
+
+**Data since:** 2026-03-01
+**Days observed:** 21
+**Days with limit hit:** 8
+
+### Global Daily Budget
+- Token estimate: ~2.9M (+/- 210K)
+- Confidence: 82% (8 data points)
+- Active limit type: tokens
+
+### Model Categories
+
+| Model            | Category | Source | Confidence | Own Limit | Errors |
+|------------------|----------|--------|------------|-----------|--------|
+| claude-opus-4.5  | stable   | auto   | 95%        | -         | 5      |
+| claude-opus-4.6  | preview  | auto   | 88%        | ~400K     | 4      |
+| gpt-5.4-mini     | stable   | auto   | 90%        | -         | 1      |
+
+### Temporal Patterns
+- Typical limit time: 16:30
+- Std dev: +/- 75 min
+- Reset type: daily_fixed
+- Estimated reset: 00:00
+
+### Generated Insights
+- **[model_impact]** claude-opus-4.5-heavy days hit limits ~2.1h earlier
+  than mixed days (75% confidence, 8 data points)
+- **[preview_detection]** claude-opus-4.6 has separate preview limit
+  (~400K tokens) (88% confidence, 4 data points)
+```
+
 ## Configuration
 
 Optionally create `~/.config/copilot-budget/config.json`:
