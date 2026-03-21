@@ -19,6 +19,7 @@ import {
   readConfig,
   appendObservation,
   readObservations,
+  readEstimates,
 } from "./persistence.js"
 import { budgetTool } from "./tools.js"
 import { enableDebug, debugLogEvent, debugLogChatParams } from "./debug.js"
@@ -27,6 +28,7 @@ import {
   extractRateLimitHeaders,
   scheduleReclassification,
 } from "./classifier.js"
+import { getBudgetStatus, checkThresholds, computeEstimates } from "./estimator.js"
 
 // ============================================================
 // Helpers
@@ -130,6 +132,57 @@ const plugin: Plugin = async ({ client }) => {
           }
 
           processAssistantMessage(incoming)
+
+          // Check threshold notifications after processing
+          if (finished && !config.quiet_mode) {
+            const d = getDaily()
+            const status = getBudgetStatus(
+              d.totalTokens,
+              d.totalRequests,
+              d.totalCost,
+              d.byModel,
+              d.limitHits.length,
+              config.known_preview_models,
+              config.known_stable_models,
+              config.premium_request_multipliers
+            )
+
+            const threshold = checkThresholds(
+              status.percentage,
+              config.notification_thresholds,
+              d.notifiedThresholds
+            )
+
+            if (threshold !== null) {
+              d.notifiedThresholds.add(threshold)
+              try {
+                const pctStr = status.percentage !== null ? `${status.percentage}%` : "?"
+                const limitStr = status.estimatedTokenLimit
+                  ? formatTokensShort(status.estimatedTokenLimit)
+                  : "unknown"
+                const confStr = status.confidence > 0.8
+                  ? ""
+                  : status.confidence > 0.5
+                    ? " (moderate confidence)"
+                    : " (low confidence)"
+
+                await client.session.promptAsync({
+                  path: { id: msg.sessionID },
+                  body: {
+                    noReply: true,
+                    parts: [
+                      {
+                        type: "text",
+                        text: `\u{26A1} **${pctStr} of daily Copilot budget used** (${formatTokensShort(d.totalTokens)} / ~${limitStr} est.)${confStr}`,
+                      },
+                    ],
+                  },
+                })
+              } catch {
+                // Notification failure is not critical
+              }
+            }
+          }
         }
 
         // ----- session.error: log all errors, detect rate limits -----
@@ -194,7 +247,12 @@ const plugin: Plugin = async ({ client }) => {
                   })),
                   dailyTokens: current.totalTokens,
                   dailyRequests: current.totalRequests,
-                  globalEstimate: null, // Will be filled in by estimator in Phase 4
+                  globalEstimate: (() => {
+                    try {
+                      const est = readEstimates()
+                      return (est as any)?.globalDailyBudget?.tokenEstimate?.value ?? null
+                    } catch { return null }
+                  })(),
                   otherModelsWorking: uniqueOtherModels.length > 0,
                   workingModels: uniqueOtherModels,
                   errorRate: totalRecent > 0 ? errorRecent / totalRecent : 0,
@@ -293,23 +351,38 @@ const plugin: Plugin = async ({ client }) => {
       try {
         const d = getDaily()
         const rpm = getCurrentRPM()
+        const status = getBudgetStatus(
+          d.totalTokens,
+          d.totalRequests,
+          d.totalCost,
+          d.byModel,
+          d.limitHits.length,
+          config.known_preview_models,
+          config.known_stable_models,
+          config.premium_request_multipliers
+        )
 
-        const modelLines = Object.entries(d.byModel)
-          .sort((a, b) => b[1].tokens - a[1].tokens)
-          .map(([m, u]) => `  ${m}: ${formatTokensShort(u.tokens)} tokens / ${u.requests} requests`)
-          .join("\n")
-
-        const limitInfo =
-          d.limitHits.length > 0
-            ? `\nLimit hits today: ${d.limitHits.length} (last at ${d.limitHits[d.limitHits.length - 1]?.ts.split("T")[1]?.split(".")[0] ?? "?"})`
-            : ""
+        const limitLine = status.estimatedTokenLimit
+          ? `Estimated daily limit: ~${formatTokensShort(status.estimatedTokenLimit)} tokens (confidence: ${Math.round(status.confidence * 100)}%)`
+          : "Estimated daily limit: unknown (still learning)"
+        const pctLine = status.percentage !== null
+          ? `Usage percentage: ~${status.percentage}%`
+          : ""
+        const limitHitLine = d.limitHits.length > 0
+          ? `Limit hits today: ${d.limitHits.length} (last at ${d.limitHits[d.limitHits.length - 1]?.ts.split("T")[1]?.split(".")[0] ?? "?"})`
+          : ""
+        const previewLine = status.previewWarnings ? `\nPreview model warnings:\n${status.previewWarnings}` : ""
+        const insightLine = status.insights ? `\nInsights:\n${status.insights}` : ""
 
         output.system.push(
           `<copilot-budget>
 Daily token usage: ${formatTokensShort(d.totalTokens)} tokens (${d.totalRequests} requests)
+${limitLine}
+${pctLine}
 Cost today: $${d.totalCost.toFixed(4)}
 Current rate: ${rpm} req/min (peak: ${d.peakRPM})
-${modelLines ? `\nModel breakdown:\n${modelLines}` : ""}${limitInfo}
+${status.modelBreakdown ? `\nModel breakdown:\n${status.modelBreakdown}` : ""}
+${limitHitLine}${previewLine}${insightLine}
 </copilot-budget>`
         )
       } catch {
