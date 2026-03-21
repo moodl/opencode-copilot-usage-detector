@@ -133,6 +133,17 @@ const plugin: Plugin = async ({ client }) => {
 
           processAssistantMessage(incoming)
 
+          // Detect silent model fallback
+          if (finished && msg.modelID && lastRequestedModel && msg.modelID !== lastRequestedModel) {
+            appendObservation({
+              ts: new Date().toISOString(),
+              type: "model_fallback",
+              requested: lastRequestedModel,
+              received: msg.modelID,
+              day_cumulative_tokens: getDaily().totalTokens,
+            })
+          }
+
           // Check threshold notifications after processing
           if (finished && !config.quiet_mode) {
             const d = getDaily()
