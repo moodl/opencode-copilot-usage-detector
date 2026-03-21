@@ -5,12 +5,19 @@
   "description": "OpenCode plugin that tracks GitHub Copilot token usage, learns rate limits empirically, and proactively informs the user",
   "main": "./dist/copilot-budget.js",
   "types": "./dist/copilot-budget.d.ts",
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test tests/**/*.test.ts"
+    "test": "node --import tsx --test tests/**/*.test.ts",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "opencode",

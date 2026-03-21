@@ -5,6 +5,7 @@ import {
   isAssistantMessage,
   isApiError,
   isRateLimitError,
+  isModelBlockedError,
 } from "../src/copilot-budget.js"
 
 // ============================================================

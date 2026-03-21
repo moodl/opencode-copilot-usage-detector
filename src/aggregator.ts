@@ -44,6 +44,7 @@ function createEmptyDay(): DailyState {
     requestTimestamps: [],
     peakRPM: 0,
     limitHits: [],
+    blockedModels: [],
     notifiedThresholds: new Set(),
     lastLimitHitTs: null,
     inLimitState: false,
@@ -136,6 +137,14 @@ export function recoverFromJSONL(): void {
       })
       daily.inLimitState = true
       daily.lastLimitHitTs = new Date(event.ts).getTime()
+    }
+    if (event.type === "model_blocked") {
+      daily.blockedModels.push({
+        ts: event.ts,
+        model: event.model,
+        errorMessage: event.error_message,
+        statusCode: event.status_code,
+      })
     }
     if (event.type === "recovery") {
       daily.inLimitState = false

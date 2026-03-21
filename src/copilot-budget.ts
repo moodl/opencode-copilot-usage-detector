@@ -63,6 +63,46 @@ export function isApiError(error: unknown): error is ApiError {
   )
 }
 
+const MODEL_BLOCKED_MESSAGE_PATTERNS = [
+  "not available",
+  "not supported",
+  "forbidden",
+  "access denied",
+  "not authorized",
+  "not included",
+  "not enabled",
+  "model not found",
+  "not allowed",
+  "not permitted",
+  "does not have access",
+  "not part of your",
+  "unavailable for your",
+]
+
+export function isModelBlockedError(
+  error: ApiError,
+  modelCumulativeTokens: number,
+  modelCumulativeRequests: number
+): boolean {
+  const code = error.data?.statusCode
+  const msg = error.data?.message?.toLowerCase() ?? ""
+
+  // 403 Forbidden — always blocked
+  if (code === 403) return true
+
+  // Message patterns + model was never successfully used
+  if (modelCumulativeTokens === 0 && modelCumulativeRequests === 0) {
+    if (MODEL_BLOCKED_MESSAGE_PATTERNS.some((p) => msg.includes(p))) return true
+  }
+
+  // 401 with model-specific denial (not generic auth failure)
+  if (code === 401 && MODEL_BLOCKED_MESSAGE_PATTERNS.some((p) => msg.includes(p))) {
+    return true
+  }
+
+  return false
+}
+
 export function isRateLimitError(error: ApiError): boolean {
   const code = error.data?.statusCode
   const msg = error.data?.message?.toLowerCase() ?? ""
@@ -312,6 +352,46 @@ const plugin = (async (ctx) => {
 
           if (isApiError(error)) {
             const apiErr = error
+            const errModel = errSm.model ?? "unknown"
+            const modelUsage = getDaily().byModel[errModel]
+            const modelTokens = modelUsage?.tokens ?? 0
+            const modelRequests = modelUsage?.requests ?? 0
+
+            // Check for blocked model BEFORE rate limit check
+            if (isModelBlockedError(apiErr, modelTokens, modelRequests)) {
+              const d = getDaily()
+              const blockedTs = new Date().toISOString()
+              d.blockedModels.push({
+                ts: blockedTs,
+                model: errModel,
+                errorMessage: apiErr.data?.message ?? "",
+                statusCode: apiErr.data?.statusCode,
+              })
+
+              appendObservation({
+                ts: blockedTs,
+                type: "model_blocked",
+                session: sessionId ?? "unknown",
+                model: errModel,
+                provider: errSm.provider ?? "unknown",
+                error_name: apiErr.name,
+                error_message: apiErr.data?.message ?? "",
+                error_raw: JSON.stringify(apiErr),
+                status_code: apiErr.data?.statusCode,
+                is_retryable: apiErr.data?.isRetryable ?? false,
+                day_cumulative_tokens: d.totalTokens,
+                day_cumulative_requests: d.totalRequests,
+              })
+
+              if (sessionId) {
+                await sendMessage(
+                  sessionId,
+                  `\u{1F6AB} **Model blocked:** ${errModel} is not available on your plan (status: ${apiErr.data?.statusCode ?? "unknown"}). This won't count toward rate limit estimates.`
+                )
+              }
+              return // Skip rate-limit path entirely
+            }
+
             const rateLimitHeaders = extractRateLimitHeaders(apiErr.data?.responseHeaders)
             const classification = classifyErrorImmediate(
               apiErr.data?.message ?? "", apiErr.data?.statusCode, apiErr.data?.responseHeaders
@@ -476,6 +556,9 @@ const plugin = (async (ctx) => {
         const limitHitLine = d.limitHits.length > 0
           ? `Limit hits today: ${d.limitHits.length} (last at ${d.limitHits[d.limitHits.length - 1]?.ts.split("T")[1]?.split(".")[0] ?? "?"})`
           : ""
+        const blockedLine = d.blockedModels.length > 0
+          ? `Blocked models: ${[...new Set(d.blockedModels.map((b) => b.model))].join(", ")}`
+          : ""
         const previewLine = status.previewWarnings ? `\nPreview model warnings:\n${status.previewWarnings}` : ""
         const insightLine = status.insights ? `\nInsights:\n${status.insights}` : ""
 
@@ -487,7 +570,8 @@ ${pctLine}
 Cost today: $${d.totalCost.toFixed(4)}
 Current rate: ${rpm} req/min (peak: ${d.peakRPM})
 ${status.modelBreakdown ? `\nModel breakdown:\n${status.modelBreakdown}` : ""}
-${limitHitLine}${previewLine}${insightLine}
+${limitHitLine}
+${blockedLine}${previewLine}${insightLine}
 </copilot-budget>`
         )
       } catch {
@@ -501,8 +585,11 @@ ${limitHitLine}${previewLine}${insightLine}
     "experimental.session.compacting": async (_input, output) => {
       try {
         const d = getDaily()
+        const blockedStr = d.blockedModels.length > 0
+          ? ` ${[...new Set(d.blockedModels.map((b) => b.model))].length} model(s) are blocked.`
+          : ""
         output.context.push(
-          `The user has used ${formatTokensShort(d.totalTokens)} tokens today across ${d.totalRequests} requests. ${d.limitHits.length > 0 ? `Rate-limited ${d.limitHits.length} time(s) today.` : "No rate limits hit today."}`
+          `The user has used ${formatTokensShort(d.totalTokens)} tokens today across ${d.totalRequests} requests. ${d.limitHits.length > 0 ? `Rate-limited ${d.limitHits.length} time(s) today.` : "No rate limits hit today."}${blockedStr}`
         )
       } catch {
         // Non-critical

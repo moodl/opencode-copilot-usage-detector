@@ -100,6 +100,20 @@ export function formatStatus(): string {
     lines.push("")
   }
 
+  // Blocked models
+  if (d.blockedModels.length > 0) {
+    const uniqueBlocked = [...new Set(d.blockedModels.map((b) => b.model))]
+    lines.push(`### Blocked Models: ${uniqueBlocked.length}`)
+    lines.push("")
+    for (const model of uniqueBlocked) {
+      const first = d.blockedModels.find((b) => b.model === model)!
+      lines.push(
+        `- **${model}** — not available on your plan (status: ${first.statusCode ?? "?"})`
+      )
+    }
+    lines.push("")
+  }
+
   // Limit hits
   if (d.limitHits.length > 0) {
     lines.push(`### Limit Hits Today: ${d.limitHits.length}`)
@@ -196,6 +210,19 @@ export function formatErrors(): string {
       }
       lines.push("")
     }
+  }
+
+  // Blocked model events
+  const blockedLogs = readObservations({ type: "model_blocked" })
+  if (blockedLogs.length > 0) {
+    const recent = blockedLogs.slice(-10)
+    lines.push(`## Blocked Models (${recent.length} of ${blockedLogs.length} total)`)
+    lines.push("")
+    for (const e of recent) {
+      if (e.type !== "model_blocked") continue
+      lines.push(`- **${e.ts}** — ${e.model}: ${e.error_message} (status: ${e.status_code ?? "?"})`)
+    }
+    lines.push("")
   }
 
   // Other logged errors

@@ -29,6 +29,19 @@ const BURST_LIMIT_PATTERNS = [
   "slow down",
 ]
 
+const MODEL_BLOCKED_PATTERNS = [
+  "not available.*plan",
+  "not supported",
+  "forbidden",
+  "access denied",
+  "not authorized.*model",
+  "not included.*plan",
+  "model not found",
+  "not allowed",
+  "does not have access",
+  "not enabled",
+]
+
 function matchesAny(text: string, patterns: string[]): boolean {
   const lower = text.toLowerCase()
   return patterns.some((p) => {
@@ -45,6 +58,22 @@ export function classifyErrorImmediate(
   responseHeaders: Record<string, string> | undefined
 ): { class: LimitClass; confidence: number; reason: string } {
   const msg = errorMessage.toLowerCase()
+
+  // Check for blocked model first — 403 is a strong signal
+  if (statusCode === 403) {
+    return {
+      class: "model_blocked",
+      confidence: 0.95,
+      reason: "status_403_forbidden",
+    }
+  }
+  if (matchesAny(errorMessage, MODEL_BLOCKED_PATTERNS)) {
+    return {
+      class: "model_blocked",
+      confidence: 0.6,
+      reason: "error_message_matches_blocked_pattern",
+    }
+  }
 
   // Check for rate-limit headers first — these are the most reliable signal
   if (responseHeaders) {
@@ -193,6 +222,20 @@ export function reclassify(
   originalEvent: LimitHitEvent,
   ctx: ReclassificationContext
 ): { newClass: LimitClass; confidence: number; reason: string } {
+  // Check for blocked model: zero usage and no recovery after 30 min
+  if (
+    originalEvent.day_cumulative_tokens === 0 &&
+    originalEvent.day_cumulative_requests === 0 &&
+    !ctx.hasRecovered &&
+    ctx.minutesSinceError > 30
+  ) {
+    return {
+      newClass: "model_blocked",
+      confidence: 0.7,
+      reason: "zero_usage_no_recovery_suggests_blocked",
+    }
+  }
+
   // Stage 5: If we have recovery data, use recovery time to classify
   if (ctx.hasRecovered && ctx.recoveryMinutes !== null) {
     if (ctx.recoveryMinutes < 30) {

@@ -43,6 +43,8 @@ export interface ModelEstimate {
   errorsDaily: number
   errorsPreview: number
   errorsBurst: number
+  isBlocked: boolean
+  blockedSince: string | null
 }
 
 export interface Estimates {
@@ -276,15 +278,21 @@ export function computeEstimates(
 
   // ---- Per-model estimates ----
   const models: Record<string, ModelEstimate> = {}
+  const blockedEvents = allObs.filter((e) => e.type === "model_blocked")
   const allModelNames = new Set<string>()
   for (const e of limitHits) allModelNames.add(e.model)
   for (const e of usageEvents) {
     if (e.type === "usage") allModelNames.add(e.model)
   }
+  for (const e of blockedEvents) {
+    if (e.type === "model_blocked") allModelNames.add(e.model)
+  }
   allModelNames.delete("unknown")
 
   for (const model of allModelNames) {
-    const modelHits = limitHits.filter((e) => e.model === model)
+    const modelHits = limitHits.filter(
+      (e) => e.model === model && getFinalClass(e, reclassifications) !== "model_blocked"
+    )
     const modelDailyHits = modelHits.filter(
       (e) => getFinalClass(e, reclassifications) === "hard_daily_limit"
     )
@@ -356,6 +364,12 @@ export function computeEstimates(
       }
     }
 
+    // Detect blocked models
+    const modelBlockedEvents = blockedEvents.filter(
+      (e) => e.type === "model_blocked" && e.model === model
+    )
+    const isBlocked = modelBlockedEvents.length > 0 && modelUsage.length === 0
+
     models[model] = {
       category,
       categorySource,
@@ -368,6 +382,8 @@ export function computeEstimates(
       errorsDaily: modelDailyHits.length,
       errorsPreview: modelPreviewHits.length,
       errorsBurst: modelBurstHits.length,
+      isBlocked,
+      blockedSince: isBlocked && modelBlockedEvents.length > 0 ? modelBlockedEvents[0].ts : null,
     }
   }
 
@@ -500,6 +516,19 @@ export function computeEstimates(
         confidence: est.categoryConfidence,
         dataPoints: est.errorsPreview,
         firstObserved: est.ownLimit.lastHit?.split("T")[0] ?? new Date().toISOString().split("T")[0],
+      })
+    }
+  }
+
+  // Insight: blocked models
+  for (const [model, est] of Object.entries(models)) {
+    if (est.isBlocked && est.blockedSince) {
+      insights.push({
+        type: "model_blocked",
+        text: `${model} appears blocked (not available on your plan)`,
+        confidence: 0.9,
+        dataPoints: blockedEvents.filter((e) => e.type === "model_blocked" && e.model === model).length,
+        firstObserved: est.blockedSince.split("T")[0],
       })
     }
   }

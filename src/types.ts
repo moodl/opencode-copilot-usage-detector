@@ -76,6 +76,21 @@ export interface DayEndEvent {
   models_used: Record<string, { tokens: number; requests: number }>
 }
 
+export interface ModelBlockedEvent {
+  ts: string
+  type: "model_blocked"
+  session: string
+  model: string
+  provider: string
+  error_name: string
+  error_message: string
+  error_raw: string
+  status_code: number | undefined
+  is_retryable: boolean
+  day_cumulative_tokens: number
+  day_cumulative_requests: number
+}
+
 export interface ErrorLoggedEvent {
   ts: string
   type: "error_logged"
@@ -96,6 +111,7 @@ export type ObservationEvent =
   | RecoveryEvent
   | ModelFallbackEvent
   | DayEndEvent
+  | ModelBlockedEvent
   | ErrorLoggedEvent
 
 export type LimitClass =
@@ -104,6 +120,7 @@ export type LimitClass =
   | "preview_limit"
   | "burst_rpm_limit"
   | "unknown_recovery"
+  | "model_blocked"
 
 // ============================================================
 // In-memory state
@@ -129,6 +146,12 @@ export interface DailyState {
     tokensAtHit: number
     requestsAtHit: number
     rpmAtHit: number
+  }>
+  blockedModels: Array<{
+    ts: string
+    model: string
+    errorMessage: string
+    statusCode: number | undefined
   }>
   notifiedThresholds: Set<number>
   lastLimitHitTs: number | null
