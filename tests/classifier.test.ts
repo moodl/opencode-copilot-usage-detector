@@ -49,6 +49,37 @@ describe("classifyErrorImmediate", () => {
     assert.equal(r.class, "burst_rpm_limit")
   })
 
+  it("classifies 403 as model_blocked", () => {
+    const r = classifyErrorImmediate("forbidden", 403, undefined)
+    assert.equal(r.class, "model_blocked")
+    assert(r.confidence >= 0.9)
+  })
+
+  it("classifies 403 as model_blocked even with unrecognized message", () => {
+    const r = classifyErrorImmediate("some unknown error text", 403, undefined)
+    assert.equal(r.class, "model_blocked")
+  })
+
+  it("classifies 'model not found' as model_blocked", () => {
+    const r = classifyErrorImmediate("model not found", 404, undefined)
+    assert.equal(r.class, "model_blocked")
+  })
+
+  it("classifies 'access denied' as model_blocked", () => {
+    const r = classifyErrorImmediate("access denied to this resource", 200, undefined)
+    assert.equal(r.class, "model_blocked")
+  })
+
+  it("classifies 'not available on plan' as model_blocked", () => {
+    const r = classifyErrorImmediate("this model is not available on your plan", 200, undefined)
+    assert.equal(r.class, "model_blocked")
+  })
+
+  it("does not classify preview messages as blocked", () => {
+    const r = classifyErrorImmediate("model is currently unavailable", 503, undefined)
+    assert.equal(r.class, "preview_limit")
+  })
+
   it("returns unknown for unrecognized messages", () => {
     const r = classifyErrorImmediate("something went wrong internally", 500, undefined)
     assert.equal(r.class, "unknown")
@@ -238,6 +269,31 @@ describe("reclassify", () => {
       makeCtx({ minutesSinceError: 150, hasRecovered: false })
     )
     assert.equal(r.newClass, "hard_daily_limit")
+  })
+
+  it("reclassifies to model_blocked when 0 tokens and no recovery after 30 min", () => {
+    const r = reclassify(
+      makeLimitHit({ day_cumulative_tokens: 0, day_cumulative_requests: 0 }),
+      makeCtx({ minutesSinceError: 45, hasRecovered: false, dailyTokens: 0, dailyRequests: 0 })
+    )
+    assert.equal(r.newClass, "model_blocked")
+    assert(r.confidence >= 0.6)
+  })
+
+  it("does not reclassify to model_blocked if model has prior usage", () => {
+    const r = reclassify(
+      makeLimitHit({ day_cumulative_tokens: 500_000, day_cumulative_requests: 20 }),
+      makeCtx({ minutesSinceError: 45, hasRecovered: false })
+    )
+    assert.notEqual(r.newClass, "model_blocked")
+  })
+
+  it("does not reclassify to model_blocked if recovered", () => {
+    const r = reclassify(
+      makeLimitHit({ day_cumulative_tokens: 0, day_cumulative_requests: 0 }),
+      makeCtx({ minutesSinceError: 45, hasRecovered: true, recoveryMinutes: 20 })
+    )
+    assert.notEqual(r.newClass, "model_blocked")
   })
 
   it("keeps original class when insufficient data", () => {

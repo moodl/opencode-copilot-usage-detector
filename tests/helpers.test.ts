@@ -139,3 +139,59 @@ describe("isRateLimitError", () => {
     assert.equal(isRateLimitError(err), false)
   })
 })
+
+// ============================================================
+// isModelBlockedError
+// ============================================================
+
+describe("isModelBlockedError", () => {
+  it("returns true for 403 status regardless of message or prior usage", () => {
+    const err = { name: "APIError" as const, data: { statusCode: 403, message: "forbidden", isRetryable: false } }
+    assert.equal(isModelBlockedError(err, 100_000, 10), true)
+  })
+
+  it("returns true for 403 even with empty message", () => {
+    const err = { name: "APIError" as const, data: { statusCode: 403, message: "", isRetryable: false } }
+    assert.equal(isModelBlockedError(err, 0, 0), true)
+  })
+
+  it("returns true for blocked message patterns with 0 usage", () => {
+    const err = { name: "APIError" as const, data: { statusCode: 200, message: "Model not found", isRetryable: false } }
+    assert.equal(isModelBlockedError(err, 0, 0), true)
+  })
+
+  it("returns true for 'not available' with 0 usage", () => {
+    const err = { name: "APIError" as const, data: { statusCode: 200, message: "This model is not available for your account", isRetryable: false } }
+    assert.equal(isModelBlockedError(err, 0, 0), true)
+  })
+
+  it("returns false for blocked message patterns WITH prior usage", () => {
+    const err = { name: "APIError" as const, data: { statusCode: 200, message: "Model not found", isRetryable: false } }
+    assert.equal(isModelBlockedError(err, 50_000, 5), false)
+  })
+
+  it("returns true for 401 with model-specific denial", () => {
+    const err = { name: "APIError" as const, data: { statusCode: 401, message: "not authorized for this model", isRetryable: false } }
+    assert.equal(isModelBlockedError(err, 0, 0), true)
+  })
+
+  it("returns false for generic 401 unauthorized", () => {
+    const err = { name: "APIError" as const, data: { statusCode: 401, message: "unauthorized", isRetryable: false } }
+    assert.equal(isModelBlockedError(err, 0, 0), false)
+  })
+
+  it("returns false for 429 rate limit", () => {
+    const err = { name: "APIError" as const, data: { statusCode: 429, message: "too many requests", isRetryable: true } }
+    assert.equal(isModelBlockedError(err, 0, 0), false)
+  })
+
+  it("returns false for 500 internal error", () => {
+    const err = { name: "APIError" as const, data: { statusCode: 500, message: "internal server error", isRetryable: false } }
+    assert.equal(isModelBlockedError(err, 0, 0), false)
+  })
+
+  it("returns false for undefined message", () => {
+    const err = { name: "APIError" as const, data: { statusCode: 200 } }
+    assert.equal(isModelBlockedError(err, 0, 0), false)
+  })
+})
