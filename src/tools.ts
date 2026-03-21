@@ -2,6 +2,7 @@ import { tool } from "@opencode-ai/plugin/tool"
 import { getDaily, getCurrentRPM } from "./aggregator.js"
 import { readObservations, readEstimates, getDataDir, readConfig } from "./persistence.js"
 import { getBudgetStatus, computeEstimates } from "./estimator.js"
+import { pollPremiumRequests, getCachedPremiumRequests, getApiStatus, formatPremiumRequestStatus } from "./github-api.js"
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -24,15 +25,35 @@ function formatStatus(): string {
     config.premium_request_multipliers
   )
 
+  // Premium requests from GitHub API
+  const pr = getCachedPremiumRequests()
+
   const lines: string[] = [
     `## Copilot Budget Status — ${d.date}`,
     "",
+  ]
+
+  if (pr) {
+    lines.push("### Monthly Premium Requests")
+    lines.push("")
+    lines.push(formatPremiumRequestStatus(pr))
+    lines.push(`*Last updated: ${pr.fetchedAt}*`)
+    lines.push("")
+  } else {
+    const apiSt = getApiStatus()
+    if (apiSt.authMethod === "none" && apiSt.lastError) {
+      lines.push(`*Premium request API: ${apiSt.lastError}*`)
+      lines.push("")
+    }
+  }
+
+  lines.push(
     `**Total tokens today:** ${formatTokens(d.totalTokens)}`,
     `**Total requests today:** ${d.totalRequests}`,
     `**Total cost today:** $${d.totalCost.toFixed(4)}`,
     `**Current RPM:** ${rpm} req/min (peak: ${d.peakRPM})`,
     "",
-  ]
+  )
 
   // Estimates
   if (status.estimatedTokenLimit) {

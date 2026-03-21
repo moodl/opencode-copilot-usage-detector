@@ -29,6 +29,12 @@ import {
   scheduleReclassification,
 } from "./classifier.js"
 import { getBudgetStatus, checkThresholds, computeEstimates } from "./estimator.js"
+import {
+  pollPremiumRequests,
+  getCachedPremiumRequests,
+  getAuthSetupMessage,
+  formatPremiumRequestStatus,
+} from "./github-api.js"
 
 // ============================================================
 // Helpers
@@ -409,6 +415,12 @@ const plugin: Plugin = async ({ client }) => {
           config.premium_request_multipliers
         )
 
+        // Poll GitHub API for premium request data (respects 15-min interval)
+        const pr = await pollPremiumRequests(config).catch(() => getCachedPremiumRequests())
+        const premiumLine = pr
+          ? formatPremiumRequestStatus(pr)
+          : ""
+
         const limitLine = status.estimatedTokenLimit
           ? `Estimated daily limit: ~${formatTokensShort(status.estimatedTokenLimit)} tokens (confidence: ${Math.round(status.confidence * 100)}%)`
           : "Estimated daily limit: unknown (still learning)"
@@ -423,7 +435,7 @@ const plugin: Plugin = async ({ client }) => {
 
         output.system.push(
           `<copilot-budget>
-Daily token usage: ${formatTokensShort(d.totalTokens)} tokens (${d.totalRequests} requests)
+${premiumLine ? premiumLine + "\n" : ""}Daily token usage: ${formatTokensShort(d.totalTokens)} tokens (${d.totalRequests} requests)
 ${limitLine}
 ${pctLine}
 Cost today: $${d.totalCost.toFixed(4)}

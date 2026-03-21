@@ -160,6 +160,49 @@ export interface PluginConfig {
   quiet_mode: boolean
 }
 
+// ============================================================
+// GitHub API types
+// ============================================================
+
+export interface PremiumRequestEntry {
+  date: string
+  product: string
+  sku: string
+  quantity: number
+  unitType: string
+  pricePerUnit: number
+  grossAmount: number
+  discountAmount: number
+  netAmount: number
+  organizationName: string
+  repositorySlug: string | null
+}
+
+export interface BillingUsageResponse {
+  usageItems: PremiumRequestEntry[]
+  [key: string]: unknown
+}
+
+export interface PremiumRequestSummary {
+  totalPremiumRequests: number
+  byModel: Record<string, number>
+  byProduct: Record<string, number>
+  monthlyAllowance: number
+  remaining: number
+  percentUsed: number
+  fetchedAt: string
+}
+
+export type ApiAuthMethod = "copilot_token" | "gh_cli" | "none"
+
+export interface ApiStatus {
+  authMethod: ApiAuthMethod
+  username: string | null
+  lastFetch: number
+  lastError: string | null
+  premiumRequests: PremiumRequestSummary | null
+}
+
 export const DEFAULT_CONFIG: PluginConfig = {
   debug: false,
   copilot_plan: "pro",
