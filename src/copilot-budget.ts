@@ -14,6 +14,7 @@ import {
   getDaily,
   getCurrentRPM,
   setTimezone,
+  resetState,
 } from "./aggregator.js"
 import {
   ensureDataDir,
@@ -21,6 +22,9 @@ import {
   appendObservation,
   readObservations,
   readEstimates,
+  clearTodayObservations,
+  removeObservations,
+  clearEstimates,
 } from "./persistence.js"
 import { budgetTool, formatStatus, formatHistory, formatErrors, formatInsights } from "./tools.js"
 import { enableDebug, debugLogEvent, debugLogChatParams } from "./debug.js"
@@ -246,6 +250,84 @@ const plugin = (async (ctx) => {
           )
           result = "Estimates recomputed. Run `/budget insights` to see results."
           break
+        case "reset": {
+          const today = getDaily().date
+          const removed = clearTodayObservations(today)
+          clearEstimates()
+          resetState()
+          recoverFromJSONL()
+          result = `Day reset: removed ${removed} observation(s) for ${today}. In-memory state cleared. Estimates deleted.`
+          break
+        }
+        case "clean": {
+          const cleanTarget = args[1]?.toLowerCase()
+          if (!cleanTarget) {
+            result = [
+              "## /budget clean",
+              "",
+              "Remove specific entries from the observation log:",
+              "",
+              "- `/budget clean errors` — Remove all error_logged entries",
+              "- `/budget clean blocked` — Remove all model_blocked entries",
+              "- `/budget clean limit_hits` — Remove all limit_hit entries",
+              "- `/budget clean model <name>` — Remove all entries for a specific model",
+              "- `/budget clean before <date>` — Remove entries before a date (YYYY-MM-DD)",
+              "",
+              "After cleaning, estimates are recomputed automatically.",
+            ].join("\n")
+          } else {
+            let removed = 0
+            let cleanResult: string | null = null
+            switch (cleanTarget) {
+              case "errors":
+                removed = removeObservations({ type: "error_logged" })
+                break
+              case "blocked":
+                removed = removeObservations({ type: "model_blocked" })
+                break
+              case "limit_hits":
+                removed = removeObservations({ type: "limit_hit" })
+                break
+              case "model": {
+                const modelName = args[2]
+                if (!modelName) {
+                  cleanResult = "Usage: `/budget clean model <model-name>`"
+                  break
+                }
+                removed = removeObservations({ model: modelName })
+                break
+              }
+              case "before": {
+                const beforeDate = args[2]
+                if (!beforeDate || !/^\d{4}-\d{2}-\d{2}$/.test(beforeDate)) {
+                  cleanResult = "Usage: `/budget clean before YYYY-MM-DD`"
+                  break
+                }
+                removed = removeObservations({ before: beforeDate + "T00:00:00" })
+                break
+              }
+              default:
+                cleanResult = `Unknown clean target: ${cleanTarget}. Run \`/budget clean\` for options.`
+            }
+            if (cleanResult) {
+              result = cleanResult
+            } else {
+              // Recompute after cleaning
+              clearEstimates()
+              resetState()
+              recoverFromJSONL()
+              try {
+                computeEstimates(
+                  config.known_preview_models,
+                  config.known_stable_models,
+                  config.premium_request_multipliers
+                )
+              } catch { /* */ }
+              result = `Cleaned ${removed} observation(s). Estimates recomputed.`
+            }
+          }
+          break
+        }
         default:
           result = [
             "## /budget commands",
@@ -255,6 +337,8 @@ const plugin = (async (ctx) => {
             "- `/budget insights` — Learned patterns and limit analysis",
             "- `/budget errors` — Rate limit events and error catalog",
             "- `/budget recompute` — Force recompute all estimates",
+            "- `/budget reset` — Wipe today's data and start fresh",
+            "- `/budget clean [target]` — Remove specific entries from log",
           ].join("\n")
       }
 

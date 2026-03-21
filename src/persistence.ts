@@ -3,6 +3,7 @@ import {
   readFileSync,
   writeFileSync,
   renameSync,
+  unlinkSync,
   existsSync,
   mkdirSync,
   statSync,
@@ -192,6 +193,73 @@ export function readConfig(): PluginConfig {
 
 export function getDataDir(): string {
   return DATA_DIR
+}
+
+// ============================================================
+// Reset / Clean operations
+// ============================================================
+
+/** Remove all observations from today, keeping older days intact. */
+export function clearTodayObservations(today: string): number {
+  if (!existsSync(OBSERVATIONS_FILE)) return 0
+  try {
+    const all = readObservations()
+    const todayPrefix = today + "T"
+    const kept = all.filter((e) => !e.ts.startsWith(todayPrefix))
+    const removed = all.length - kept.length
+
+    if (removed > 0) {
+      const content = kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length > 0 ? "\n" : "")
+      const tempPath = OBSERVATIONS_FILE + ".tmp"
+      writeFileSync(tempPath, content)
+      renameSync(tempPath, OBSERVATIONS_FILE)
+    }
+    return removed
+  } catch {
+    return 0
+  }
+}
+
+/** Remove observations matching a filter. Returns count of removed entries. */
+export function removeObservations(filter: {
+  type?: string
+  model?: string
+  before?: string
+  after?: string
+  class?: string
+}): number {
+  if (!existsSync(OBSERVATIONS_FILE)) return 0
+  try {
+    const all = readObservations()
+    const kept = all.filter((e) => {
+      if (filter.type && e.type === filter.type) return false
+      if (filter.before && e.ts < filter.before) return false
+      if (filter.after && e.ts > filter.after) return false
+      if (filter.model && "model" in e && (e as any).model === filter.model) return false
+      if (filter.class && "class" in e && (e as any).class === filter.class) return false
+      return true
+    })
+    const removed = all.length - kept.length
+
+    if (removed > 0) {
+      const content = kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length > 0 ? "\n" : "")
+      const tempPath = OBSERVATIONS_FILE + ".tmp"
+      writeFileSync(tempPath, content)
+      renameSync(tempPath, OBSERVATIONS_FILE)
+    }
+    return removed
+  } catch {
+    return 0
+  }
+}
+
+/** Delete estimates.json to force fresh recomputation. */
+export function clearEstimates(): void {
+  try {
+    if (existsSync(ESTIMATES_FILE)) unlinkSync(ESTIMATES_FILE)
+  } catch {
+    // Not critical
+  }
 }
 
 // ============================================================
