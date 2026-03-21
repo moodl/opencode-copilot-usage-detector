@@ -262,55 +262,6 @@ The JSONL file auto-rotates at 50MB or when entries are older than 90 days. No d
 4. **Estimation** -- Weighted averages with 14-day half-life produce limit estimates with confidence scores
 5. **Insight generation** -- After accumulating data, the system identifies patterns (e.g., "opus-heavy days hit limits 2h earlier")
 
-## Architecture
-
-```
-Plugin Entry (copilot-budget.ts)
-+-- Config Hook (registers /budget command)
-+-- Command Handler (/budget subcommands, sentinel pattern)
-+-- Event Handler (message.updated, session.error)
-+-- Blocked Model Detection (early filter before rate-limit path)
-+-- Toast Notifications (rate limit, blocked, threshold)
-+-- chat.params Hook (per-session model/provider capture)
-+-- System Prompt Injection (skipped for subagents)
-+-- Session Compaction Context
-+-- Budget Tool (for LLM tool-calling)
-
-Aggregator (aggregator.ts)
-+-- Token + Request counting (per-session, per-model)
-+-- RPM tracking (sliding window)
-+-- Day rollover + recovery detection
-+-- Startup recovery from JSONL
-
-Classifier (classifier.ts)
-+-- Stage 1: Error message pattern matching
-+-- Stage 2: Cross-model correlation
-+-- Stage 3: Cancel-rate analysis
-+-- Stage 4: Global budget comparison
-+-- Stage 5: Recovery-time classification
-+-- Delayed reclassification (10-min timer)
-
-Estimator (estimator.ts)
-+-- Global daily budget (weighted average)
-+-- Per-model estimates
-+-- Limit dimension hypotheses (tokens/requests/RPM)
-+-- Model category detection (stable/preview)
-+-- Temporal pattern analysis
-+-- Multiplier hypothesis tracking
-+-- Insight generation
-
-GitHub API (github-api.ts)
-+-- Premium request usage from billing API
-+-- Multi-strategy auth (Copilot token, gh CLI, fallback)
-+-- Periodic polling (15-min interval)
-
-Persistence (persistence.ts)
-+-- JSONL append + filtered read
-+-- Atomic rotation (size/age)
-+-- Estimates read/write
-+-- Config management + validation
-```
-
 ## Development
 
 ```bash
