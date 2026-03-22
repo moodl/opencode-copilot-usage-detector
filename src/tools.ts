@@ -205,6 +205,13 @@ export function formatInsights(): string {
     config.premium_request_multipliers
   )
 
+  const te = estimates.globalDailyBudget.tokenEstimate
+  const hasData = te.dataPoints > 0 || estimates.insights.length > 0
+
+  if (!hasData) {
+    return `Copilot Budget Insights\n\nDays observed: ${estimates.totalDaysObserved}\nNo limit hits observed yet — keep using OpenCode and insights will appear as data accumulates.`
+  }
+
   const lines: string[] = [
     "Copilot Budget Insights",
     "",
@@ -214,7 +221,6 @@ export function formatInsights(): string {
   ]
 
   // Global budget
-  const te = estimates.globalDailyBudget.tokenEstimate
   if (te.dataPoints > 0) {
     lines.push("")
     lines.push("Global Daily Budget")
@@ -232,8 +238,9 @@ export function formatInsights(): string {
     lines.push(`  Confidence: ${Math.round(be.confidence * 100)}% (${be.dataPoints} data points)`)
   }
 
-  // Per-model estimates
+  // Per-model estimates (skip if all unknown with 0 errors)
   const modelEntries = Object.entries(estimates.models)
+    .filter(([, est]) => est.category !== "unknown" || est.totalErrors > 0 || est.ownLimit !== null)
   if (modelEntries.length > 0) {
     lines.push("")
     lines.push("Model Categories")

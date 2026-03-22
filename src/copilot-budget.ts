@@ -361,6 +361,9 @@ const plugin = (async (ctx) => {
           config.known_stable_models, config.premium_request_multipliers
         )
 
+        // Skip injection when there's nothing useful to show (saves LLM context tokens)
+        if (!status.estimatedTokenLimit && d.limitHits.length === 0 && d.blockedModels.length === 0) return
+
         const limitLine = status.estimatedTokenLimit
           ? `Estimated daily limit: ~${formatTokensShort(status.estimatedTokenLimit)} tokens (confidence: ${Math.round(status.confidence * 100)}%)`
           : "Estimated daily limit: unknown (still learning)"
