@@ -9,6 +9,17 @@ import { debugLogError } from "./debug.js"
 let daily: DailyState = createEmptyDay()
 const sessions = new Map<string, SessionState>()
 
+// When true, suppresses appendObservation calls (for tests)
+let testMode = false
+
+export function setTestMode(enabled: boolean): void {
+  testMode = enabled
+}
+
+function writeObservation(event: Parameters<typeof appendObservation>[0]): void {
+  if (!testMode) appendObservation(event)
+}
+
 // Track the last processed message ID to avoid double-counting.
 // message.updated fires multiple times for the same message as parts stream in.
 const processedMessages = new Set<string>()
@@ -93,7 +104,7 @@ function checkDayRollover(): void {
         : null,
       models_used: { ...daily.byModel },
     }
-    appendObservation(dayEnd)
+    writeObservation(dayEnd)
 
     // Reset for new day
     daily = createEmptyDay()
@@ -218,7 +229,7 @@ export function processAssistantMessage(msg: IncomingMessage): void {
     const minutesSinceLimit = daily.lastLimitHitTs
       ? (Date.now() - daily.lastLimitHitTs) / 60_000
       : 0
-    appendObservation({
+    writeObservation({
       ts: new Date().toISOString(),
       type: "recovery",
       model: msg.modelId,
@@ -246,7 +257,7 @@ export function processAssistantMessage(msg: IncomingMessage): void {
     requests_last_minute: getCurrentRPM(),
     request_ok: true,
   }
-  appendObservation(event)
+  writeObservation(event)
 }
 
 // ============================================================
@@ -267,14 +278,15 @@ export interface IncomingError {
 export function processErrorEvent(
   err: IncomingError,
   lastRequestedModel: string | null,
-  lastRequestedProvider: string | null
+  lastRequestedProvider: string | null,
+  initialClass: import("./types.js").LimitClass = "unknown"
 ): string {
   checkDayRollover()
 
   const rpm = getCurrentRPM()
   const ts = new Date().toISOString()
 
-  appendObservation({
+  writeObservation({
     ts,
     type: "limit_hit",
     session: err.sessionId ?? "unknown",
@@ -290,13 +302,13 @@ export function processErrorEvent(
     is_retryable: err.isRetryable,
     response_headers: err.responseHeaders,
     response_body: err.responseBody,
-    class: "unknown",
+    class: initialClass,
   })
 
   daily.limitHits.push({
     ts,
     model: lastRequestedModel ?? "unknown",
-    class: "unknown",
+    class: initialClass,
     tokensAtHit: daily.totalTokens,
     requestsAtHit: daily.totalRequests,
     rpmAtHit: rpm,

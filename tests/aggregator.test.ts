@@ -7,11 +7,13 @@ import {
   getCurrentRPM,
   recoverFromJSONL,
   resetState,
+  setTestMode,
 } from "../src/aggregator.js"
 import { makeMessage, makeError } from "./factories.js"
 
 describe("aggregator", () => {
   beforeEach(() => {
+    setTestMode(true)
     resetState()
   })
 

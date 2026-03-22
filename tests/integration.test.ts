@@ -9,6 +9,7 @@ import {
   processAssistantMessage,
   processErrorEvent,
   getDaily,
+  setTestMode,
 } from "../src/aggregator.js"
 import { classifyErrorImmediate } from "../src/classifier.js"
 import { checkThresholds } from "../src/estimator.js"
@@ -20,6 +21,7 @@ let p: PersistenceInstance
 
 describe("integration", () => {
   beforeEach(() => {
+    setTestMode(true)
     tempDir = mkdtempSync(join(tmpdir(), "copilot-budget-integration-"))
     p = createPersistence(tempDir)
     resetState()

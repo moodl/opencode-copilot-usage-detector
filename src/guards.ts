@@ -14,6 +14,7 @@ export function isApiError(error: unknown): error is ApiError {
 const MODEL_BLOCKED_MESSAGE_PATTERNS = [
   "not available",
   "not supported",
+  "model_not_supported",
   "forbidden",
   "access denied",
   "not authorized",
@@ -43,8 +44,8 @@ export function isModelBlockedError(
     if (MODEL_BLOCKED_MESSAGE_PATTERNS.some((p) => msg.includes(p))) return true
   }
 
-  // 401 with model-specific denial (not generic auth failure)
-  if (code === 401 && MODEL_BLOCKED_MESSAGE_PATTERNS.some((p) => msg.includes(p))) {
+  // 400/401 with model-specific denial message
+  if ((code === 400 || code === 401) && MODEL_BLOCKED_MESSAGE_PATTERNS.some((p) => msg.includes(p))) {
     return true
   }
 

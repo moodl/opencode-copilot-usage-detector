@@ -203,13 +203,10 @@ export async function handleSessionError(
         responseBody: apiErr.data?.responseBody,
       }
 
-      const errorTs = processErrorEvent(incomingError, errSm.model, errSm.provider)
+      const errorTs = processErrorEvent(incomingError, errSm.model, errSm.provider, classification.class)
       deps.maybeRecomputeEstimates(true)
 
       const d = getDaily()
-      if (d.limitHits.length > 0) {
-        d.limitHits[d.limitHits.length - 1].class = classification.class
-      }
 
       // Schedule delayed reclassification (10 min after event)
       scheduleReclassification(errorTs, () =>
