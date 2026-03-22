@@ -1,6 +1,6 @@
 {
   "name": "opencode-copilot-usage-detector",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "type": "module",
   "description": "OpenCode plugin that tracks GitHub Copilot token usage, learns rate limits empirically, and proactively informs the user",
   "main": "./dist/copilot-budget.js",
