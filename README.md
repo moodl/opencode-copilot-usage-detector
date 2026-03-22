@@ -8,13 +8,23 @@
 
 An [OpenCode](https://opencode.ai) plugin that tracks GitHub Copilot token usage across sessions, empirically learns rate limits, and proactively informs you before you hit them.
 
+## What This Plugin Does
+
+This plugin has two capabilities:
+
+1. **Token tracking** — Tracks token and request usage across sessions, per model, per day. Always works from minute one via `/budget status`.
+
+2. **Rate limit prediction** — Learns your daily token limits empirically by observing when you get rate-limited, then warns you as you approach those limits on subsequent days. This requires hitting a rate limit at least once before predictions begin — the system learns from real data, not assumptions.
+
+> **Note:** If you never hit rate limits (e.g., you have a high-tier plan or light usage), the prediction system won't have data to learn from and won't produce warnings. Cross-session token tracking via `/budget status` may still be useful, but rate limit prediction is the primary purpose of this plugin.
+
 ## The Problem
 
 GitHub Copilot doesn't publish concrete token/request limits for the coding assistant. There are multiple opaque limit tiers:
 
-- **Monthly premium requests** with model-specific multipliers
 - **Short-term burst limits** per time window
 - **Preview model limits** that are separate and stricter
+- **Daily/monthly token budgets** that vary by plan
 
 This plugin learns these limits from your own usage patterns and warns you as you approach them.
 
