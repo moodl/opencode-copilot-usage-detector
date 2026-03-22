@@ -32,7 +32,6 @@ This plugin learns these limits from your own usage patterns and warns you as yo
 - **Config validation** — Validates config types on startup, warns on unknown keys
 - **Temporal patterns** — Learns what time of day you typically hit limits and how model choice affects runway
 - **Model fallback detection** — Detects when Copilot silently downgrades your model
-- **GitHub billing API integration** — Fetches real premium request usage when auth is available
 - **Full error catalog** — Logs all API errors for pattern analysis
 
 ## Requirements
@@ -116,29 +115,16 @@ The plugin works automatically -- no action needed. It:
 ### Example: `/budget status`
 
 ```
-## Copilot Budget Status — 2026-03-21
+Copilot Budget — 2026-03-21
 
-### Monthly Premium Requests
-Premium requests this month: 147 / 300 (49% used, 153 remaining)
-  claude-opus-4.5: 89 requests
-  gpt-5.4-mini: 58 requests
-*Last updated: 2026-03-21T14:30:00Z*
+Tokens today: 1.8M (67 requests)
+RPM: 3 req/min (peak: 7)
+Estimated limit: ~2.9M (82% confidence)
+Usage: ~63%
 
-**Total tokens today:** 1.8M
-**Total requests today:** 67
-**Total cost today:** $0.0000
-**Current RPM:** 3 req/min (peak: 7)
-
-**Estimated daily token limit:** ~2.9M (82% confidence)
-**Usage:** ~63%
-**Limit type:** tokens
-
-### Model Breakdown
-
-| Model            | Tokens | Requests | Category |
-|------------------|--------|----------|----------|
-| claude-opus-4.5  | 1.4M   | 42       | stable   |
-| gpt-5.4-mini     | 422K   | 25       | stable   |
+Models:
+  claude-opus-4.5  1.4M   42 req
+  gpt-5.4-mini     422K   25 req
 ```
 
 ### Example: System Prompt Injection
@@ -147,11 +133,9 @@ Every LLM response automatically sees this context (no tool call needed):
 
 ```xml
 <copilot-budget>
-Premium requests this month: 147 / 300 (49% used, 153 remaining)
 Daily token usage: 1.8M tokens (67 requests)
 Estimated daily limit: ~2.9M tokens (confidence: 82%)
 Usage percentage: ~63%
-Cost today: $0.0000
 Current rate: 3 req/min (peak: 7)
 
 Model breakdown:
@@ -173,36 +157,31 @@ Alerts appear as non-intrusive TUI toasts that don't pollute the conversation:
 After accumulating data over several days:
 
 ```
-## Copilot Budget Insights
+Copilot Budget Insights
 
-**Data since:** 2026-03-01
-**Days observed:** 21
-**Days with limit hit:** 8
+Data since: 2026-03-01
+Days observed: 21
+Days with limit hit: 8
 
-### Global Daily Budget
-- Token estimate: ~2.9M (+/- 210K)
-- Confidence: 82% (8 data points)
-- Active limit type: tokens
+Global Daily Budget
+  Token estimate: ~2.9M (+/- 210K)
+  Confidence: 82% (8 data points)
+  Active limit type: tokens
 
-### Model Categories
+Model Categories
+  claude-opus-4.5  stable   auto  95%  5 errors
+  claude-opus-4.6  preview  auto  88%  4 errors  limit ~400K
+  gpt-5.4-mini     stable   auto  90%  1 errors
 
-| Model            | Category | Source | Confidence | Own Limit | Errors |
-|------------------|----------|--------|------------|-----------|--------|
-| claude-opus-4.5  | stable   | auto   | 95%        | -         | 5      |
-| claude-opus-4.6  | preview  | auto   | 88%        | ~400K     | 4      |
-| gpt-5.4-mini     | stable   | auto   | 90%        | -         | 1      |
+Temporal Patterns
+  Typical limit time: 16:30
+  Std dev: +/- 75 min
+  Reset type: daily_fixed
+  Estimated reset: 00:00
 
-### Temporal Patterns
-- Typical limit time: 16:30
-- Std dev: +/- 75 min
-- Reset type: daily_fixed
-- Estimated reset: 00:00
-
-### Generated Insights
-- **[model_impact]** claude-opus-4.5-heavy days hit limits ~2.1h earlier
-  than mixed days (75% confidence, 8 data points)
-- **[preview_detection]** claude-opus-4.6 has separate preview limit
-  (~400K tokens) (88% confidence, 4 data points)
+Insights
+  [model_impact] claude-opus-4.5-heavy days hit limits ~2.1h earlier than mixed days (75%, 8 data points)
+  [preview_detection] claude-opus-4.6 has separate preview limit (~400K tokens) (88%, 4 data points)
 ```
 
 ## Configuration
@@ -212,7 +191,6 @@ Optionally create `~/.config/copilot-budget/config.json`:
 ```json
 {
   "debug": false,
-  "copilot_plan": "pro",
   "known_preview_models": [],
   "known_stable_models": [],
   "notification_thresholds": [60, 80, 95],
@@ -221,7 +199,6 @@ Optionally create `~/.config/copilot-budget/config.json`:
     "claude-sonnet-4.5": 1.0,
     "gpt-5.4-mini": 0.33
   },
-  "monthly_premium_allowance": 1000,
   "timezone": "Europe/Berlin",
   "quiet_mode": false
 }
@@ -232,12 +209,10 @@ All fields are optional -- sensible defaults are used.
 | Field | Description | Default |
 |-------|-------------|---------|
 | `debug` | Log all events to `debug-events.jsonl` | `false` |
-| `copilot_plan` | Your Copilot plan (`free`, `pro`, `pro+`, `business`, `enterprise`) | `"pro"` |
 | `known_preview_models` | Models to always treat as preview | `[]` |
 | `known_stable_models` | Models to always treat as stable | `[]` |
 | `notification_thresholds` | Percentage thresholds for chat warnings | `[60, 80, 95]` |
 | `premium_request_multipliers` | Model cost multipliers for weighted tracking | `{}` |
-| `monthly_premium_allowance` | Override monthly premium request allowance | `1000` |
 | `timezone` | Timezone for day boundaries (e.g., `Europe/Berlin`, `America/New_York`) | `"UTC"` |
 | `quiet_mode` | Suppress threshold notifications | `false` |
 
@@ -285,7 +260,7 @@ npm install /path/to/opencode-copilot-usage-detector
 
 This project is **not affiliated with, endorsed by, or associated with GitHub, Microsoft, or OpenCode** in any way. It is an independent, community-built tool.
 
-- This plugin observes your local usage patterns and API error responses. It does **not** access any private or undocumented APIs beyond the public GitHub billing endpoints (which require explicit user authorization).
+- This plugin observes your local usage patterns and API error responses. It does **not** access any external APIs — all data is derived from local observation of API responses.
 - Rate limit estimates are **empirical approximations**, not official figures. GitHub may change limits at any time without notice.
 - The authors assume **no responsibility** for any consequences of using this plugin, including but not limited to: account restrictions, incorrect estimates, missed rate limits, or any impact on your GitHub Copilot service.
 - All data collected by this plugin is stored **locally on your machine** and is never transmitted to any external service.

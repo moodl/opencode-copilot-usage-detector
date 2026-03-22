@@ -173,67 +173,20 @@ export interface SessionState {
 
 export interface PluginConfig {
   debug: boolean
-  copilot_plan: string
   known_preview_models: string[]
   known_stable_models: string[]
   notification_thresholds: number[]
   premium_request_multipliers: Record<string, number>
-  monthly_premium_allowance: number
   timezone: string
   quiet_mode: boolean
 }
 
-// ============================================================
-// GitHub API types
-// ============================================================
-
-export interface PremiumRequestEntry {
-  date: string
-  product: string
-  sku: string
-  quantity: number
-  unitType: string
-  pricePerUnit: number
-  grossAmount: number
-  discountAmount: number
-  netAmount: number
-  organizationName: string
-  repositorySlug: string | null
-}
-
-export interface BillingUsageResponse {
-  usageItems: PremiumRequestEntry[]
-  [key: string]: unknown
-}
-
-export interface PremiumRequestSummary {
-  totalPremiumRequests: number
-  byModel: Record<string, number>
-  byProduct: Record<string, number>
-  monthlyAllowance: number
-  remaining: number
-  percentUsed: number
-  fetchedAt: string
-}
-
-export type ApiAuthMethod = "copilot_token" | "gh_cli" | "none"
-
-export interface ApiStatus {
-  authMethod: ApiAuthMethod
-  username: string | null
-  lastFetch: number
-  lastError: string | null
-  premiumRequests: PremiumRequestSummary | null
-}
-
 export const DEFAULT_CONFIG: PluginConfig = {
   debug: false,
-  copilot_plan: "pro",
   known_preview_models: [],
   known_stable_models: [],
   notification_thresholds: [60, 80, 95],
   premium_request_multipliers: {},
-  monthly_premium_allowance: 1000,
   timezone: "Europe/Berlin",
   quiet_mode: false,
 }

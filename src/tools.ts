@@ -2,8 +2,6 @@ import { tool } from "@opencode-ai/plugin/tool"
 import { getDaily, getCurrentRPM } from "./aggregator.js"
 import { readObservations, readConfig } from "./persistence.js"
 import { getBudgetStatus, computeEstimates } from "./estimator.js"
-import { getCachedPremiumRequests, getApiStatus, formatPremiumRequestStatus } from "./github-api.js"
-
 import { formatTokens } from "./format.js"
 
 function pad(str: string, len: number): string {
@@ -25,23 +23,9 @@ export function formatStatus(): string {
     config.premium_request_multipliers
   )
 
-  const pr = getCachedPremiumRequests()
-
   const lines: string[] = [
     `Copilot Budget — ${d.date}`,
   ]
-
-  // Premium requests
-  if (pr) {
-    lines.push("")
-    lines.push(formatPremiumRequestStatus(pr))
-  } else {
-    const apiSt = getApiStatus()
-    if (apiSt.authMethod === "none" && apiSt.lastError) {
-      lines.push("")
-      lines.push(`Premium request API: ${apiSt.lastError}`)
-    }
-  }
 
   // Daily usage
   lines.push("")

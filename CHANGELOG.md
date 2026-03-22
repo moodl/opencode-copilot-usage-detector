@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.1.6 (2026-03-22)
+
+### Refactoring
+- Extract shared `formatTokens` to `src/format.ts` (was duplicated 3x)
+- Extract type guards to `src/guards.ts` (were scattered in main plugin file)
+- Extract event handlers to `src/event-handlers.ts` (copilot-budget.ts 758 → 428 lines)
+- Break `computeEstimates()` into 6 focused sub-functions (434 → ~70 line orchestrator)
+- Remove all `as any` casts (8 → 0) with proper type narrowing
+- Add `debugLogError` to ~33 empty catch blocks (visible in debug mode)
+- Extract shared test factories to `tests/factories.ts`
+
+### Fixes
+- Fix tests writing to production `observations.jsonl` (add testMode flag to aggregator)
+- Fix error classification not persisted to JSONL (was always "unknown" after restart)
+- Fix HTTP 400 "model not supported" not recognized as blocked model
+- Add `model_not_supported` to blocked message patterns
+- Remove dead `rateLimitHeaders` variable from event handler
+
+### Improvements
+- Strip markdown from all `/budget` output — plain text only (OpenCode doesn't render markdown)
+- Remove noise from status: category column, cost line, data dir footer
+- Filter "unknown" model names from blocked models display
+- Aligned plain-text model breakdown with padding
+- Restore premium API auth guidance message in plain text
+- Remove GitHub billing API integration (simplifies setup, reduces friction)
+
 ## 0.1.4 (2026-03-21)
 
 ### Features

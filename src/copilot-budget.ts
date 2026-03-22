@@ -21,11 +21,6 @@ import {
 import { budgetTool, formatStatus, formatHistory, formatErrors, formatInsights } from "./tools.js"
 import { enableDebug, debugLogEvent, debugLogChatParams, debugLogError } from "./debug.js"
 import { getBudgetStatus, computeEstimates } from "./estimator.js"
-import {
-  pollPremiumRequests,
-  getCachedPremiumRequests,
-  formatPremiumRequestStatus,
-} from "./github-api.js"
 import { handled } from "./command-handled.js"
 import { handleMessageUpdated, handleSessionError } from "./event-handlers.js"
 
@@ -366,9 +361,6 @@ const plugin = (async (ctx) => {
           config.known_stable_models, config.premium_request_multipliers
         )
 
-        const pr = await pollPremiumRequests(config).catch(() => getCachedPremiumRequests())
-        const premiumLine = pr ? formatPremiumRequestStatus(pr) : ""
-
         const limitLine = status.estimatedTokenLimit
           ? `Estimated daily limit: ~${formatTokensShort(status.estimatedTokenLimit)} tokens (confidence: ${Math.round(status.confidence * 100)}%)`
           : "Estimated daily limit: unknown (still learning)"
@@ -384,7 +376,7 @@ const plugin = (async (ctx) => {
 
         output.system.push(
           `<copilot-budget>
-${premiumLine ? premiumLine + "\n" : ""}Daily token usage: ${formatTokensShort(d.totalTokens)} tokens (${d.totalRequests} requests)
+Daily token usage: ${formatTokensShort(d.totalTokens)} tokens (${d.totalRequests} requests)
 ${limitLine}
 ${pctLine}
 Current rate: ${rpm} req/min (peak: ${d.peakRPM})

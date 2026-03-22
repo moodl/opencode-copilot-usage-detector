@@ -196,10 +196,8 @@ function validateConfig(raw: Record<string, unknown>): { config: Partial<PluginC
 
   const typeChecks: Record<string, string> = {
     debug: "boolean",
-    copilot_plan: "string",
     timezone: "string",
     quiet_mode: "boolean",
-    monthly_premium_allowance: "number",
   }
 
   const arrayChecks = ["known_preview_models", "known_stable_models", "notification_thresholds"]

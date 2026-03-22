@@ -170,7 +170,6 @@ describe("persistence (with temp dir)", () => {
   describe("config", () => {
     it("returns defaults when file does not exist", () => {
       const config = p.readConfig()
-      assert.equal(config.copilot_plan, "pro")
       assert.equal(config.debug, false)
       assert.deepEqual(config.notification_thresholds, [60, 80, 95])
     })
