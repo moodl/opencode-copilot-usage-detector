@@ -23,8 +23,11 @@
 - Remove noise from status: category column, cost line, data dir footer
 - Filter "unknown" model names from blocked models display
 - Aligned plain-text model breakdown with padding
-- Restore premium API auth guidance message in plain text
 - Remove GitHub billing API integration (simplifies setup, reduces friction)
+- Suppress system prompt injection when no useful data exists (saves LLM context tokens)
+- `/budget insights` shows "no data yet" message instead of empty tables
+- Filter empty model categories (unknown/0 errors) from insights output
+- Add capability overview and honest expectations note to README
 
 ## 0.1.4 (2026-03-21)
 
