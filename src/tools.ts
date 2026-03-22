@@ -1,10 +1,14 @@
 import { tool } from "@opencode-ai/plugin/tool"
 import { getDaily, getCurrentRPM } from "./aggregator.js"
-import { readObservations, readEstimates, getDataDir, readConfig } from "./persistence.js"
+import { readObservations, readConfig } from "./persistence.js"
 import { getBudgetStatus, computeEstimates } from "./estimator.js"
-import { pollPremiumRequests, getCachedPremiumRequests, getApiStatus, formatPremiumRequestStatus } from "./github-api.js"
+import { getCachedPremiumRequests, getApiStatus, formatPremiumRequestStatus } from "./github-api.js"
 
 import { formatTokens } from "./format.js"
+
+function pad(str: string, len: number): string {
+  return str.length >= len ? str : str + " ".repeat(len - str.length)
+}
 
 export function formatStatus(): string {
   const d = getDaily()
@@ -21,116 +25,92 @@ export function formatStatus(): string {
     config.premium_request_multipliers
   )
 
-  // Premium requests from GitHub API
   const pr = getCachedPremiumRequests()
 
   const lines: string[] = [
-    `## Copilot Budget Status — ${d.date}`,
-    "",
+    `Copilot Budget — ${d.date}`,
   ]
 
+  // Premium requests
   if (pr) {
-    lines.push("### Monthly Premium Requests")
     lines.push("")
     lines.push(formatPremiumRequestStatus(pr))
-    lines.push(`*Last updated: ${pr.fetchedAt}*`)
-    lines.push("")
   } else {
     const apiSt = getApiStatus()
     if (apiSt.authMethod === "none" && apiSt.lastError) {
-      lines.push(`*Premium request API: ${apiSt.lastError}*`)
       lines.push("")
+      lines.push(`Premium request API: ${apiSt.lastError}`)
     }
   }
 
-  lines.push(
-    `**Total tokens today:** ${formatTokens(d.totalTokens)}`,
-    `**Total requests today:** ${d.totalRequests}`,
-    `**Total cost today:** $${d.totalCost.toFixed(4)}`,
-    `**Current RPM:** ${rpm} req/min (peak: ${d.peakRPM})`,
-    "",
-  )
+  // Daily usage
+  lines.push("")
+  lines.push(`Tokens today: ${formatTokens(d.totalTokens)} (${d.totalRequests} requests)`)
+  lines.push(`RPM: ${rpm} req/min (peak: ${d.peakRPM})`)
 
   // Estimates
   if (status.estimatedTokenLimit) {
     const confStr = Math.round(status.confidence * 100)
-    lines.push(`**Estimated daily token limit:** ~${formatTokens(status.estimatedTokenLimit)} (${confStr}% confidence)`)
+    lines.push(`Estimated limit: ~${formatTokens(status.estimatedTokenLimit)} (${confStr}% confidence)`)
     if (status.percentage !== null) {
-      lines.push(`**Usage:** ~${status.percentage}%`)
+      lines.push(`Usage: ~${status.percentage}%`)
     }
-    lines.push(`**Limit type:** ${status.activeLimitType}`)
-    lines.push("")
   } else {
-    lines.push("**Estimated daily limit:** Still learning (no limit hits observed yet)")
-    lines.push("")
+    lines.push("Estimated limit: still learning")
   }
 
   if (status.estimatedRequestLimit) {
-    lines.push(`**Estimated daily request limit:** ~${status.estimatedRequestLimit}`)
-    lines.push("")
+    lines.push(`Estimated request limit: ~${status.estimatedRequestLimit}`)
   }
 
   // Model breakdown
   const models = Object.entries(d.byModel)
   if (models.length > 0) {
-    lines.push("### Model Breakdown")
     lines.push("")
-    lines.push("| Model | Tokens | Requests | Category |")
-    lines.push("|-------|--------|----------|----------|")
-
-    let estimates: any = null
-    try { estimates = readEstimates() } catch { /* */ }
-
-    for (const [model, usage] of models.sort((a, b) => b[1].tokens - a[1].tokens)) {
-      const cat = estimates?.models?.[model]?.category ?? "unknown"
-      lines.push(`| ${model} | ${formatTokens(usage.tokens)} | ${usage.requests} | ${cat} |`)
+    lines.push("Models:")
+    const sorted = models.sort((a, b) => b[1].tokens - a[1].tokens)
+    const maxName = Math.max(...sorted.map(([m]) => m.length))
+    for (const [model, usage] of sorted) {
+      lines.push(`  ${pad(model, maxName)}  ${pad(formatTokens(usage.tokens), 6)}  ${usage.requests} req`)
     }
-    lines.push("")
   }
 
   // Preview warnings
   if (status.previewWarnings) {
-    lines.push("### Preview Model Warnings")
     lines.push("")
+    lines.push("Preview warnings:")
     lines.push(status.previewWarnings)
-    lines.push("")
   }
 
-  // Blocked models
-  if (d.blockedModels.length > 0) {
-    const uniqueBlocked = [...new Set(d.blockedModels.map((b) => b.model))]
-    lines.push(`### Blocked Models: ${uniqueBlocked.length}`)
+  // Blocked models (skip "unknown" model names)
+  const namedBlocked = d.blockedModels.filter((b) => b.model !== "unknown")
+  if (namedBlocked.length > 0) {
+    const uniqueBlocked = [...new Set(namedBlocked.map((b) => b.model))]
     lines.push("")
+    lines.push("Blocked models:")
     for (const model of uniqueBlocked) {
-      const first = d.blockedModels.find((b) => b.model === model)!
-      lines.push(
-        `- **${model}** — not available on your plan (status: ${first.statusCode ?? "?"})`
-      )
+      const first = namedBlocked.find((b) => b.model === model)!
+      lines.push(`  ${model} — not available on your plan (status: ${first.statusCode ?? "?"})`)
     }
-    lines.push("")
   }
 
   // Limit hits
   if (d.limitHits.length > 0) {
-    lines.push(`### Limit Hits Today: ${d.limitHits.length}`)
     lines.push("")
+    lines.push(`Limit hits today: ${d.limitHits.length}`)
     for (const hit of d.limitHits) {
-      lines.push(
-        `- **${hit.ts.split("T")[1]?.split(".")[0] ?? hit.ts}** — ${hit.model} (class: ${hit.class}, tokens: ${formatTokens(hit.tokensAtHit)}, requests: ${hit.requestsAtHit}, RPM: ${hit.rpmAtHit})`
-      )
+      const time = hit.ts.split("T")[1]?.split(".")[0] ?? hit.ts
+      lines.push(`  ${time}  ${hit.model}  ${hit.class}  ${formatTokens(hit.tokensAtHit)} tokens  ${hit.requestsAtHit} req`)
     }
-    lines.push("")
   }
 
   // Insights
   if (status.insights) {
-    lines.push("### Insights")
     lines.push("")
+    lines.push("Insights:")
     lines.push(status.insights)
-    lines.push("")
   }
 
-  lines.push(`*Data dir: ${getDataDir()}*`)
   return lines.join("\n")
 }
 
@@ -143,18 +123,15 @@ export function formatHistory(days: number): string {
   }
 
   const lines: string[] = [
-    `## Usage History (last ${days} days)`,
+    `Usage History (last ${days} days)`,
     "",
-    "| Date | Tokens | Requests | Limit Hit |",
-    "|------|--------|----------|-----------|",
   ]
 
   for (const e of recent) {
     if (e.type !== "day_end") continue
     const date = e.ts.split("T")[0]
-    lines.push(
-      `| ${date} | ${formatTokens(e.day_cumulative_tokens)} | ${e.day_cumulative_requests} | ${e.limit_hit ? "Yes" : "No"} |`
-    )
+    const limit = e.limit_hit ? "limit hit" : ""
+    lines.push(`  ${date}  ${pad(formatTokens(e.day_cumulative_tokens), 6)}  ${pad(String(e.day_cumulative_requests) + " req", 8)}  ${limit}`)
   }
 
   return lines.join("\n")
@@ -181,26 +158,26 @@ export function formatErrors(): string {
   // Rate limit events
   if (limitHits.length > 0) {
     const recent = limitHits.slice(-20)
-    lines.push(`## Rate Limit Events (${recent.length} of ${limitHits.length} total)`)
+    lines.push(`Rate Limit Events (${recent.length} of ${limitHits.length} total)`)
     lines.push("")
 
     for (const e of recent) {
       if (e.type !== "limit_hit") continue
       const finalClass = reclassMap.get(e.ts) ?? e.class
-      lines.push(`### ${e.ts}`)
-      lines.push(`- **Model:** ${e.model}`)
-      lines.push(`- **Class:** ${e.class}${finalClass !== e.class ? ` -> ${finalClass}` : ""}`)
-      lines.push(`- **Status:** ${e.status_code ?? "unknown"}`)
-      lines.push(`- **Message:** ${e.error_message}`)
-      lines.push(`- **Retryable:** ${e.is_retryable}`)
-      lines.push(`- **Day totals at hit:** ${formatTokens(e.day_cumulative_tokens)} tokens, ${e.day_cumulative_requests} requests, ${e.requests_last_minute} RPM`)
+      lines.push(e.ts)
+      lines.push(`  Model: ${e.model}`)
+      lines.push(`  Class: ${e.class}${finalClass !== e.class ? ` -> ${finalClass}` : ""}`)
+      lines.push(`  Status: ${e.status_code ?? "unknown"}`)
+      lines.push(`  Message: ${e.error_message}`)
+      lines.push(`  Retryable: ${e.is_retryable}`)
+      lines.push(`  Day totals: ${formatTokens(e.day_cumulative_tokens)} tokens, ${e.day_cumulative_requests} req, ${e.requests_last_minute} RPM`)
       if (e.response_headers) {
         const rateLimitHeaders = Object.entries(e.response_headers)
           .filter(([k]) => k.toLowerCase().includes("rate") || k.toLowerCase().includes("retry"))
         if (rateLimitHeaders.length > 0) {
-          lines.push(`- **Rate-limit headers:**`)
+          lines.push("  Rate-limit headers:")
           for (const [k, v] of rateLimitHeaders) {
-            lines.push(`  - ${k}: ${v}`)
+            lines.push(`    ${k}: ${v}`)
           }
         }
       }
@@ -212,11 +189,11 @@ export function formatErrors(): string {
   const blockedLogs = readObservations({ type: "model_blocked" })
   if (blockedLogs.length > 0) {
     const recent = blockedLogs.slice(-10)
-    lines.push(`## Blocked Models (${recent.length} of ${blockedLogs.length} total)`)
+    lines.push(`Blocked Models (${recent.length} of ${blockedLogs.length} total)`)
     lines.push("")
     for (const e of recent) {
       if (e.type !== "model_blocked") continue
-      lines.push(`- **${e.ts}** — ${e.model}: ${e.error_message} (status: ${e.status_code ?? "?"})`)
+      lines.push(`  ${e.ts}  ${e.model}: ${e.error_message} (status: ${e.status_code ?? "?"})`)
     }
     lines.push("")
   }
@@ -224,11 +201,11 @@ export function formatErrors(): string {
   // Other logged errors
   if (errorLogs.length > 0) {
     const recent = errorLogs.slice(-10)
-    lines.push(`## Other Errors (${recent.length} of ${errorLogs.length} total)`)
+    lines.push(`Other Errors (${recent.length} of ${errorLogs.length} total)`)
     lines.push("")
     for (const e of recent) {
       if (e.type !== "error_logged") continue
-      lines.push(`- **${e.ts}** — ${e.error_name}: ${e.error_message} (model: ${e.model}, status: ${e.status_code ?? "?"})`)
+      lines.push(`  ${e.ts}  ${e.error_name}: ${e.error_message} (model: ${e.model}, status: ${e.status_code ?? "?"})`)
     }
     lines.push("")
   }
@@ -245,78 +222,74 @@ export function formatInsights(): string {
   )
 
   const lines: string[] = [
-    "## Copilot Budget Insights",
+    "Copilot Budget Insights",
     "",
-    `**Data since:** ${estimates.dataSince.split("T")[0]}`,
-    `**Days observed:** ${estimates.totalDaysObserved}`,
-    `**Days with limit hit:** ${estimates.daysWithLimitHit}`,
-    "",
+    `Data since: ${estimates.dataSince.split("T")[0]}`,
+    `Days observed: ${estimates.totalDaysObserved}`,
+    `Days with limit hit: ${estimates.daysWithLimitHit}`,
   ]
 
   // Global budget
   const te = estimates.globalDailyBudget.tokenEstimate
   if (te.dataPoints > 0) {
-    lines.push("### Global Daily Budget")
-    lines.push(`- Token estimate: ~${formatTokens(te.value)} (+/- ${formatTokens(te.stdDev)})`)
-    lines.push(`- Confidence: ${Math.round(te.confidence * 100)}% (${te.dataPoints} data points)`)
-    lines.push(`- Active limit type: ${estimates.globalDailyBudget.activeLimitType}`)
     lines.push("")
+    lines.push("Global Daily Budget")
+    lines.push(`  Token estimate: ~${formatTokens(te.value)} (+/- ${formatTokens(te.stdDev)})`)
+    lines.push(`  Confidence: ${Math.round(te.confidence * 100)}% (${te.dataPoints} data points)`)
+    lines.push(`  Active limit type: ${estimates.globalDailyBudget.activeLimitType}`)
   }
 
   // Request frequency
   if (estimates.requestFrequency.burstLimitEstimate) {
     const be = estimates.requestFrequency.burstLimitEstimate
-    lines.push("### Burst (RPM) Limit")
-    lines.push(`- Estimated: ~${Math.round(be.value)} req/min`)
-    lines.push(`- Confidence: ${Math.round(be.confidence * 100)}% (${be.dataPoints} data points)`)
     lines.push("")
+    lines.push("Burst (RPM) Limit")
+    lines.push(`  Estimated: ~${Math.round(be.value)} req/min`)
+    lines.push(`  Confidence: ${Math.round(be.confidence * 100)}% (${be.dataPoints} data points)`)
   }
 
   // Per-model estimates
   const modelEntries = Object.entries(estimates.models)
   if (modelEntries.length > 0) {
-    lines.push("### Model Categories")
     lines.push("")
-    lines.push("| Model | Category | Source | Confidence | Own Limit | Errors |")
-    lines.push("|-------|----------|--------|------------|-----------|--------|")
+    lines.push("Model Categories")
+    const maxName = Math.max(...modelEntries.map(([m]) => m.length))
     for (const [model, est] of modelEntries) {
-      const ownLimit = est.ownLimit ? `~${formatTokens(est.ownLimit.value)}` : "-"
-      lines.push(`| ${model} | ${est.category} | ${est.categorySource} | ${Math.round(est.categoryConfidence * 100)}% | ${ownLimit} | ${est.totalErrors} |`)
+      const ownLimit = est.ownLimit ? `limit ~${formatTokens(est.ownLimit.value)}` : ""
+      lines.push(`  ${pad(model, maxName)}  ${pad(est.category, 7)}  ${est.categorySource}  ${Math.round(est.categoryConfidence * 100)}%  ${est.totalErrors} errors  ${ownLimit}`)
     }
-    lines.push("")
   }
 
   // Temporal patterns
   if (estimates.temporalPatterns.typicalLimitTime) {
-    lines.push("### Temporal Patterns")
-    lines.push(`- Typical limit time: ${estimates.temporalPatterns.typicalLimitTime}`)
-    if (estimates.temporalPatterns.typicalLimitTimeStdDevMinutes) {
-      lines.push(`- Std dev: +/- ${Math.round(estimates.temporalPatterns.typicalLimitTimeStdDevMinutes)} min`)
-    }
-    lines.push(`- Reset type: ${estimates.temporalPatterns.resetHypothesis.type}`)
-    if (estimates.temporalPatterns.resetHypothesis.estimatedResetTime) {
-      lines.push(`- Estimated reset: ${estimates.temporalPatterns.resetHypothesis.estimatedResetTime}`)
-    }
     lines.push("")
+    lines.push("Temporal Patterns")
+    lines.push(`  Typical limit time: ${estimates.temporalPatterns.typicalLimitTime}`)
+    if (estimates.temporalPatterns.typicalLimitTimeStdDevMinutes) {
+      lines.push(`  Std dev: +/- ${Math.round(estimates.temporalPatterns.typicalLimitTimeStdDevMinutes)} min`)
+    }
+    lines.push(`  Reset type: ${estimates.temporalPatterns.resetHypothesis.type}`)
+    if (estimates.temporalPatterns.resetHypothesis.estimatedResetTime) {
+      lines.push(`  Estimated reset: ${estimates.temporalPatterns.resetHypothesis.estimatedResetTime}`)
+    }
   }
 
   // Multiplier hypothesis
   if (estimates.multiplierHypothesis.rawTokens.observations > 0) {
-    lines.push("### Multiplier Hypothesis")
-    lines.push(`- Active: ${estimates.multiplierHypothesis.activeHypothesis}`)
-    lines.push(`- Raw tokens fit: ${estimates.multiplierHypothesis.rawTokens.fitScore.toFixed(3)}`)
-    lines.push(`- Weighted tokens fit: ${estimates.multiplierHypothesis.weightedTokens.fitScore.toFixed(3)}`)
     lines.push("")
+    lines.push("Multiplier Hypothesis")
+    lines.push(`  Active: ${estimates.multiplierHypothesis.activeHypothesis}`)
+    lines.push(`  Raw tokens fit: ${estimates.multiplierHypothesis.rawTokens.fitScore.toFixed(3)}`)
+    lines.push(`  Weighted tokens fit: ${estimates.multiplierHypothesis.weightedTokens.fitScore.toFixed(3)}`)
   }
 
   // Insights
   if (estimates.insights.length > 0) {
-    lines.push("### Generated Insights")
     lines.push("")
+    lines.push("Insights")
     for (const insight of estimates.insights) {
-      lines.push(`- **[${insight.type}]** ${insight.text} (${Math.round(insight.confidence * 100)}% confidence, ${insight.dataPoints} data points)`)
+      lines.push(`  [${insight.type}] ${insight.text} (${Math.round(insight.confidence * 100)}%, ${insight.dataPoints} data points)`)
     }
-    lines.push("")
   }
 
   return lines.join("\n")
@@ -345,7 +318,7 @@ export const budgetTool = tool({
           config.known_stable_models,
           config.premium_request_multipliers
         )
-        return "Estimates recomputed from observations. Run `/budget insights` to see results."
+        return "Estimates recomputed. Run /budget insights to see results."
       }
       default:
         return `Unknown action: ${args.action}`

@@ -387,7 +387,6 @@ const plugin = (async (ctx) => {
 ${premiumLine ? premiumLine + "\n" : ""}Daily token usage: ${formatTokensShort(d.totalTokens)} tokens (${d.totalRequests} requests)
 ${limitLine}
 ${pctLine}
-Cost today: $${d.totalCost.toFixed(4)}
 Current rate: ${rpm} req/min (peak: ${d.peakRPM})
 ${status.modelBreakdown ? `\nModel breakdown:\n${status.modelBreakdown}` : ""}
 ${limitHitLine}
