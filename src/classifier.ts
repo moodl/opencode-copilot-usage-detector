@@ -1,5 +1,6 @@
 import type { LimitClass, LimitHitEvent } from "./types.js"
 import { readObservations, appendObservation } from "./persistence.js"
+import { debugLogError } from "./debug.js"
 
 // ============================================================
 // Stage 1: Immediate classification from error message patterns
@@ -336,8 +337,8 @@ export function scheduleReclassification(
     pendingTimers.delete(eventTs)
     try {
       performReclassification(eventTs, buildContext)
-    } catch {
-      // Reclassification failure is not critical
+    } catch (e) {
+      debugLogError("classifier.scheduleReclassification", e)
     }
   }, RECLASSIFY_DELAY_MS)
 

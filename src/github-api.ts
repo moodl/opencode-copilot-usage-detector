@@ -9,6 +9,7 @@ import type {
   BillingUsageResponse,
   PluginConfig,
 } from "./types.js"
+import { debugLogError } from "./debug.js"
 
 // ============================================================
 // Constants
@@ -55,7 +56,8 @@ function readCopilotToken(): string | null {
       return copilot.access
     }
     return null
-  } catch {
+  } catch (e) {
+    debugLogError("github-api.readCopilotToken", e)
     return null
   }
 }
@@ -87,7 +89,8 @@ function tryGhCli(path: string): { ok: boolean; data: unknown } {
       stdio: ["pipe", "pipe", "pipe"],
     })
     return { ok: true, data: JSON.parse(result) }
-  } catch {
+  } catch (e) {
+    debugLogError("github-api.tryGhCli", e)
     return { ok: false, data: null }
   }
 }
@@ -238,7 +241,8 @@ export function parsePremiumRequestResponse(
       percentUsed: allowance > 0 ? Math.round((totalQuantity / allowance) * 100) : 0,
       fetchedAt: new Date().toISOString(),
     }
-  } catch {
+  } catch (e) {
+    debugLogError("github-api.parsePremiumRequestResponse", e)
     return null
   }
 }

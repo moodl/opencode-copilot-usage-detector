@@ -4,11 +4,7 @@ import { readObservations, readEstimates, getDataDir, readConfig } from "./persi
 import { getBudgetStatus, computeEstimates } from "./estimator.js"
 import { pollPremiumRequests, getCachedPremiumRequests, getApiStatus, formatPremiumRequestStatus } from "./github-api.js"
 
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`
-  return String(n)
-}
+import { formatTokens } from "./format.js"
 
 export function formatStatus(): string {
   const d = getDaily()

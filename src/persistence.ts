@@ -12,6 +12,11 @@ import { join } from "node:path"
 import { homedir } from "node:os"
 import type { ObservationEvent, PluginConfig } from "./types.js"
 import { DEFAULT_CONFIG } from "./types.js"
+import { debugLogError } from "./debug.js"
+
+function hasField<K extends string>(obj: object, key: K): obj is Record<K, unknown> {
+  return key in obj
+}
 
 const DATA_DIR = join(homedir(), ".config", "copilot-budget")
 const OBSERVATIONS_FILE = join(DATA_DIR, "observations.jsonl")
@@ -29,7 +34,8 @@ export function ensureDataDir(): void {
       mkdirSync(DATA_DIR, { recursive: true })
     }
     writable = true
-  } catch {
+  } catch (e) {
+    debugLogError("persistence.ensureDataDir", e)
     writable = false
   }
 }
@@ -51,8 +57,8 @@ export function appendObservation(event: ObservationEvent): void {
 
     // Check if rotation needed
     maybeRotateJsonl()
-  } catch {
-    // Graceful degradation — don't crash if we can't write
+  } catch (e) {
+    debugLogError("persistence.appendObservation", e)
   }
 }
 
@@ -71,7 +77,8 @@ export function readObservations(filter?: {
         if (filter?.type && e.type !== filter.type) return false
         return true
       })
-  } catch {
+  } catch (e) {
+    debugLogError("persistence.readObservations", e)
     return []
   }
 }
@@ -121,14 +128,15 @@ function maybeRotateJsonl(): void {
         renameSync(OBSERVATIONS_FILE, archivePath)
         try {
           renameSync(tempPath, OBSERVATIONS_FILE)
-        } catch {
+        } catch (e) {
+          debugLogError("persistence.maybeRotateJsonl.swapTemp", e)
           // Rollback: restore original from archive
           try { renameSync(archivePath, OBSERVATIONS_FILE) } catch { /* best effort */ }
         }
       }
     }
-  } catch {
-    // Rotation failure is not critical
+  } catch (e) {
+    debugLogError("persistence.maybeRotateJsonl", e)
   }
 }
 
@@ -149,8 +157,8 @@ function rotateJsonl(reason: string): void {
   try {
     const archivePath = safeArchivePath(reason)
     renameSync(OBSERVATIONS_FILE, archivePath)
-  } catch {
-    // Archive failure is not critical
+  } catch (e) {
+    debugLogError("persistence.rotateJsonl", e)
   }
 }
 
@@ -162,7 +170,8 @@ export function readEstimates(): Record<string, unknown> | null {
   if (!existsSync(ESTIMATES_FILE)) return null
   try {
     return JSON.parse(readFileSync(ESTIMATES_FILE, "utf-8")) as Record<string, unknown>
-  } catch {
+  } catch (e) {
+    debugLogError("persistence.readEstimates", e)
     return null
   }
 }
@@ -172,8 +181,8 @@ export function writeEstimates(data: Record<string, unknown> | object): void {
   try {
     ensureDataDir()
     writeFileSync(ESTIMATES_FILE, JSON.stringify(data, null, 2) + "\n")
-  } catch {
-    // Graceful degradation
+  } catch (e) {
+    debugLogError("persistence.writeEstimates", e)
   }
 }
 
@@ -243,7 +252,8 @@ export function readConfig(): { config: PluginConfig; warnings: string[] } {
     const raw = JSON.parse(readFileSync(CONFIG_FILE, "utf-8")) as Record<string, unknown>
     const { config, warnings } = validateConfig(raw)
     return { config: { ...DEFAULT_CONFIG, ...config }, warnings }
-  } catch {
+  } catch (e) {
+    debugLogError("persistence.readConfig", e)
     return { config: { ...DEFAULT_CONFIG }, warnings: ["config.json: failed to parse JSON"] }
   }
 }
@@ -272,7 +282,8 @@ export function clearTodayObservations(today: string): number {
       renameSync(tempPath, OBSERVATIONS_FILE)
     }
     return removed
-  } catch {
+  } catch (e) {
+    debugLogError("persistence.clearTodayObservations", e)
     return 0
   }
 }
@@ -294,8 +305,8 @@ export function removeObservations(filter: {
       if (filter.type && e.type === filter.type) return false
       if (filter.before && e.ts < filter.before) return false
       if (filter.after && e.ts > filter.after) return false
-      if (filter.model && "model" in e && (e as any).model === filter.model) return false
-      if (filter.class && "class" in e && (e as any).class === filter.class) return false
+      if (filter.model && hasField(e, "model") && e.model === filter.model) return false
+      if (filter.class && hasField(e, "class") && e.class === filter.class) return false
       return true
     })
     const removed = all.length - kept.length
@@ -307,7 +318,8 @@ export function removeObservations(filter: {
       renameSync(tempPath, OBSERVATIONS_FILE)
     }
     return removed
-  } catch {
+  } catch (e) {
+    debugLogError("persistence.removeObservations", e)
     return 0
   }
 }
@@ -316,8 +328,8 @@ export function removeObservations(filter: {
 export function clearEstimates(): void {
   try {
     if (existsSync(ESTIMATES_FILE)) unlinkSync(ESTIMATES_FILE)
-  } catch {
-    // Not critical
+  } catch (e) {
+    debugLogError("persistence.clearEstimates", e)
   }
 }
 
@@ -365,7 +377,8 @@ export function createPersistence(dataDir: string): PersistenceInstance {
             if (filter?.type && e.type !== filter.type) return false
             return true
           })
-      } catch {
+      } catch (e) {
+        debugLogError("persistence.factory.readObservations", e)
         return []
       }
     },
@@ -378,7 +391,8 @@ export function createPersistence(dataDir: string): PersistenceInstance {
       if (!existsSync(estFile)) return null
       try {
         return JSON.parse(readFileSync(estFile, "utf-8"))
-      } catch {
+      } catch (e) {
+        debugLogError("persistence.factory.readEstimates", e)
         return null
       }
     },
@@ -393,7 +407,8 @@ export function createPersistence(dataDir: string): PersistenceInstance {
       try {
         const raw = JSON.parse(readFileSync(cfgFile, "utf-8")) as Partial<PluginConfig>
         return { ...DEFAULT_CONFIG, ...raw }
-      } catch {
+      } catch (e) {
+        debugLogError("persistence.factory.readConfig", e)
         return { ...DEFAULT_CONFIG }
       }
     },

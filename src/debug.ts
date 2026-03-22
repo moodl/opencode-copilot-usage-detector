@@ -35,6 +35,23 @@ export function debugLogEvent(type: string, data: unknown): void {
   }
 }
 
+export function debugLogError(context: string, error: unknown): void {
+  if (!enabled) return
+  try {
+    const line = JSON.stringify({
+      ts: new Date().toISOString(),
+      type: "caught_error",
+      context,
+      error: error instanceof Error
+        ? { name: error.name, message: error.message }
+        : String(error),
+    })
+    appendFileSync(DEBUG_FILE, line + "\n")
+  } catch {
+    // Debug logging itself must never throw
+  }
+}
+
 export function debugLogChatParams(
   model: unknown,
   provider: unknown,

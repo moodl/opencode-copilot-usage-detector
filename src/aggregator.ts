@@ -1,5 +1,6 @@
 import type { DailyState, ModelUsage, SessionState, UsageEvent } from "./types.js"
 import { appendObservation, readTodayObservations } from "./persistence.js"
+import { debugLogError } from "./debug.js"
 
 // ============================================================
 // Globals
@@ -28,8 +29,8 @@ function todayString(): string {
     const result = new Date().toLocaleDateString("sv", { timeZone: configuredTimezone })
     // Validate output is actually YYYY-MM-DD (silent fallback on minimal-ICU builds)
     if (/^\d{4}-\d{2}-\d{2}$/.test(result)) return result
-  } catch {
-    // Timezone not supported or locale unavailable
+  } catch (e) {
+    debugLogError("aggregator.todayString", e)
   }
   return new Date().toISOString().split("T")[0]
 }

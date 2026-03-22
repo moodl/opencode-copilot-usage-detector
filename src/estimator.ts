@@ -5,6 +5,8 @@ import type {
   LimitClass,
 } from "./types.js"
 import { readObservations, readEstimates, writeEstimates } from "./persistence.js"
+import { formatTokens } from "./format.js"
+import { debugLogError } from "./debug.js"
 
 // ============================================================
 // Constants
@@ -145,6 +147,22 @@ function emptyEstimate(): LimitEstimate {
   return { value: 0, stdDev: 0, dataPoints: 0, confidence: 0, lastHit: null }
 }
 
+function median(values: number[]): number {
+  if (values.length === 0) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
+}
+
+function isEstimatesRecord(raw: unknown): raw is Estimates {
+  return (
+    typeof raw === "object" &&
+    raw !== null &&
+    "version" in raw &&
+    (raw as Record<string, unknown>).version === 1
+  )
+}
+
 // ============================================================
 // Get the final class for a limit_hit event (considering reclassifications)
 // ============================================================
@@ -161,43 +179,15 @@ function getFinalClass(
 }
 
 // ============================================================
-// Main estimation function
+// Sub-functions for computeEstimates
 // ============================================================
 
-export function computeEstimates(
-  knownPreviewModels: string[],
-  knownStableModels: string[],
-  premiumMultipliers: Record<string, number>
-): Estimates {
-  const allObs = readObservations()
-
-  const limitHits = allObs.filter((e) => e.type === "limit_hit") as LimitHitEvent[]
-  const reclassifications = allObs.filter((e) => e.type === "reclassify") as ReclassifyEvent[]
-  const dayEnds = allObs.filter((e) => e.type === "day_end")
-  const usageEvents = allObs.filter((e) => e.type === "usage")
-
-  // Find earliest observation date
-  const dataSince = allObs.length > 0 ? allObs[0].ts : new Date().toISOString()
-
-  // Count unique days
-  const uniqueDays = new Set(allObs.map((e) => e.ts.split("T")[0]))
-  const totalDaysObserved = uniqueDays.size
-
-  // Days with limit hits
-  const daysWithHits = new Set(
-    limitHits
-      .filter((e) => {
-        const cls = getFinalClass(e, reclassifications)
-        return cls === "hard_daily_limit"
-      })
-      .map((e) => e.ts.split("T")[0])
-  )
-
-  // ---- Global daily budget (token-based) ----
-  const dailyHits = limitHits.filter(
-    (e) => getFinalClass(e, reclassifications) === "hard_daily_limit"
-  )
-
+function computeGlobalDailyBudget(dailyHits: LimitHitEvent[]): {
+  tokenEstimate: LimitEstimate
+  requestEstimate: LimitEstimate
+  activeLimitType: "tokens" | "requests" | "unknown"
+  contributingModels: string[]
+} {
   const tokenValues = dailyHits.map((e) => e.day_cumulative_tokens)
   const tokenWeights = dailyHits.map((e) => exponentialWeight(daysAgo(e.ts)))
   const requestValues = dailyHits.map((e) => e.day_cumulative_requests)
@@ -247,7 +237,19 @@ export function computeEstimates(
     ...new Set(dailyHits.flatMap((e) => [e.model]).filter((m) => m !== "unknown")),
   ]
 
-  // ---- Request frequency ----
+  return { tokenEstimate, requestEstimate, activeLimitType, contributingModels }
+}
+
+function computeRequestFrequency(
+  usageEvents: ObservationEvent[],
+  limitHits: LimitHitEvent[],
+  reclassifications: ReclassifyEvent[],
+  totalDaysObserved: number
+): {
+  avgRequestsPerDay: number
+  peakRPM: number
+  burstLimitEstimate: LimitEstimate | null
+} {
   const avgRequestsPerDay =
     totalDaysObserved > 0
       ? usageEvents.length / totalDaysObserved
@@ -276,18 +278,20 @@ export function computeEstimates(
 
   const peakRPM = burstRpmValues.length > 0 ? Math.max(...burstRpmValues) : 0
 
-  // ---- Per-model estimates ----
+  return { avgRequestsPerDay, peakRPM, burstLimitEstimate }
+}
+
+function computeModelEstimates(
+  allModelNames: Set<string>,
+  limitHits: LimitHitEvent[],
+  usageEvents: ObservationEvent[],
+  blockedEvents: ObservationEvent[],
+  reclassifications: ReclassifyEvent[],
+  tokenEstimate: LimitEstimate,
+  knownPreviewModels: string[],
+  knownStableModels: string[]
+): Record<string, ModelEstimate> {
   const models: Record<string, ModelEstimate> = {}
-  const blockedEvents = allObs.filter((e) => e.type === "model_blocked")
-  const allModelNames = new Set<string>()
-  for (const e of limitHits) allModelNames.add(e.model)
-  for (const e of usageEvents) {
-    if (e.type === "usage") allModelNames.add(e.model)
-  }
-  for (const e of blockedEvents) {
-    if (e.type === "model_blocked") allModelNames.add(e.model)
-  }
-  allModelNames.delete("unknown")
 
   for (const model of allModelNames) {
     const modelHits = limitHits.filter(
@@ -387,7 +391,14 @@ export function computeEstimates(
     }
   }
 
-  // ---- Multiplier hypothesis ----
+  return models
+}
+
+function computeMultiplierHypothesis(
+  dailyHits: LimitHitEvent[],
+  tokenEstimate: LimitEstimate,
+  premiumMultipliers: Record<string, number>
+): Estimates["multiplierHypothesis"] {
   const rawTokenFits: number[] = []
   const weightedTokenFits: number[] = []
 
@@ -415,7 +426,25 @@ export function computeEstimates(
       ? 1 / (1 + weightedTokenFits.reduce((a, b) => a + b, 0) / weightedTokenFits.length / Math.max(1, tokenEstimate.value))
       : 0
 
-  // ---- Temporal patterns ----
+  return {
+    rawTokens: {
+      fitScore: rawFitScore,
+      observations: rawTokenFits.length,
+      values: rawTokenFits,
+    },
+    weightedTokens: {
+      fitScore: weightedFitScore,
+      observations: weightedTokenFits.length,
+      values: weightedTokenFits,
+    },
+    activeHypothesis: weightedFitScore > rawFitScore ? "weighted" : "raw",
+  }
+}
+
+function computeTemporalPatterns(
+  dailyHits: LimitHitEvent[],
+  allObs: ObservationEvent[]
+): Estimates["temporalPatterns"] {
   const hitTimes = dailyHits.map((e) => {
     const date = new Date(e.ts)
     return date.getHours() + date.getMinutes() / 60
@@ -467,8 +496,25 @@ export function computeEstimates(
     }
   }
 
-  // ---- Insights ----
+  return {
+    typicalLimitTime,
+    typicalLimitTimeStdDevMinutes: hitTimeStdDev,
+    resetHypothesis,
+  }
+}
+
+function generateInsights(
+  models: Record<string, ModelEstimate>,
+  dailyHits: LimitHitEvent[],
+  tokenEstimate: LimitEstimate,
+  blockedEvents: ObservationEvent[]
+): Estimates["insights"] {
   const insights: Estimates["insights"] = []
+
+  const hitTimes = dailyHits.map((e) => {
+    const date = new Date(e.ts)
+    return date.getHours() + date.getMinutes() / 60
+  })
 
   // Insight: model impact on limit time
   if (hitTimes.length >= 5) {
@@ -548,48 +594,78 @@ export function computeEstimates(
     }
   }
 
+  return insights
+}
+
+// ============================================================
+// Main estimation function
+// ============================================================
+
+export function computeEstimates(
+  knownPreviewModels: string[],
+  knownStableModels: string[],
+  premiumMultipliers: Record<string, number>
+): Estimates {
+  const allObs = readObservations()
+
+  const limitHits = allObs.filter((e) => e.type === "limit_hit") as LimitHitEvent[]
+  const reclassifications = allObs.filter((e) => e.type === "reclassify") as ReclassifyEvent[]
+  const usageEvents = allObs.filter((e) => e.type === "usage")
+  const blockedEvents = allObs.filter((e) => e.type === "model_blocked")
+
+  // Find earliest observation date
+  const dataSince = allObs.length > 0 ? allObs[0].ts : new Date().toISOString()
+
+  // Count unique days
+  const uniqueDays = new Set(allObs.map((e) => e.ts.split("T")[0]))
+  const totalDaysObserved = uniqueDays.size
+
+  // Days with limit hits
+  const daysWithHits = new Set(
+    limitHits
+      .filter((e) => getFinalClass(e, reclassifications) === "hard_daily_limit")
+      .map((e) => e.ts.split("T")[0])
+  )
+
+  // Daily limit hits (used by several sub-functions)
+  const dailyHits = limitHits.filter(
+    (e) => getFinalClass(e, reclassifications) === "hard_daily_limit"
+  )
+
+  // Collect all model names
+  const allModelNames = new Set<string>()
+  for (const e of limitHits) allModelNames.add(e.model)
+  for (const e of usageEvents) {
+    if (e.type === "usage") allModelNames.add(e.model)
+  }
+  for (const e of blockedEvents) {
+    if (e.type === "model_blocked") allModelNames.add(e.model)
+  }
+  allModelNames.delete("unknown")
+
+  // Compute each section via sub-functions
+  const globalDailyBudget = computeGlobalDailyBudget(dailyHits)
+  const requestFrequency = computeRequestFrequency(usageEvents, limitHits, reclassifications, totalDaysObserved)
+  const models = computeModelEstimates(
+    allModelNames, limitHits, usageEvents, blockedEvents,
+    reclassifications, globalDailyBudget.tokenEstimate,
+    knownPreviewModels, knownStableModels
+  )
+  const multiplierHypothesis = computeMultiplierHypothesis(dailyHits, globalDailyBudget.tokenEstimate, premiumMultipliers)
+  const temporalPatterns = computeTemporalPatterns(dailyHits, allObs)
+  const insights = generateInsights(models, dailyHits, globalDailyBudget.tokenEstimate, blockedEvents)
+
   const estimates: Estimates = {
     version: 1,
     lastUpdated: new Date().toISOString(),
-    dataSince: dataSince,
-    totalDaysObserved: totalDaysObserved,
+    dataSince,
+    totalDaysObserved,
     daysWithLimitHit: daysWithHits.size,
-
-    globalDailyBudget: {
-      tokenEstimate,
-      requestEstimate,
-      activeLimitType,
-      contributingModels,
-    },
-
-    requestFrequency: {
-      avgRequestsPerDay,
-      peakRPM,
-      burstLimitEstimate,
-    },
-
+    globalDailyBudget,
+    requestFrequency,
     models,
-
-    multiplierHypothesis: {
-      rawTokens: {
-        fitScore: rawFitScore,
-        observations: rawTokenFits.length,
-        values: rawTokenFits,
-      },
-      weightedTokens: {
-        fitScore: weightedFitScore,
-        observations: weightedTokenFits.length,
-        values: weightedTokenFits,
-      },
-      activeHypothesis: weightedFitScore > rawFitScore ? "weighted" : "raw",
-    },
-
-    temporalPatterns: {
-      typicalLimitTime,
-      typicalLimitTimeStdDevMinutes: hitTimeStdDev,
-      resetHypothesis,
-    },
-
+    multiplierHypothesis,
+    temporalPatterns,
     insights,
   }
 
@@ -632,11 +708,11 @@ export function getBudgetStatus(
   let estimates: Estimates | null = null
   try {
     const raw = readEstimates()
-    if (raw && typeof raw === "object" && "version" in raw) {
-      estimates = raw as unknown as Estimates
+    if (isEstimatesRecord(raw)) {
+      estimates = raw
     }
-  } catch {
-    // No estimates available yet
+  } catch (e) {
+    debugLogError("estimator.getBudgetStatus", e)
   }
 
   const tokenLimit = estimates?.globalDailyBudget.tokenEstimate.value ?? null
@@ -718,21 +794,4 @@ export function checkThresholds(
     }
   }
   return null
-}
-
-// ============================================================
-// Helpers
-// ============================================================
-
-function median(values: number[]): number {
-  if (values.length === 0) return 0
-  const sorted = [...values].sort((a, b) => a - b)
-  const mid = Math.floor(sorted.length / 2)
-  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`
-  return String(n)
 }

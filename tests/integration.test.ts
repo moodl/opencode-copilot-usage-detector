@@ -9,48 +9,14 @@ import {
   processAssistantMessage,
   processErrorEvent,
   getDaily,
-  type IncomingMessage,
-  type IncomingError,
 } from "../src/aggregator.js"
 import { classifyErrorImmediate } from "../src/classifier.js"
 import { checkThresholds } from "../src/estimator.js"
 import type { UsageEvent, LimitHitEvent } from "../src/types.js"
+import { makeMessage, makeError } from "./factories.js"
 
 let tempDir: string
 let p: PersistenceInstance
-
-function makeMessage(overrides: Partial<IncomingMessage> = {}): IncomingMessage {
-  return {
-    messageId: `msg_${Math.random().toString(36).slice(2)}`,
-    sessionId: "ses_int",
-    modelId: "claude-opus-4.5",
-    providerId: "github-copilot",
-    tokens: {
-      total: 10000,
-      input: 5000,
-      output: 3000,
-      reasoning: 1000,
-      cache: { read: 500, write: 500 },
-    },
-    cost: 0.01,
-    finished: true,
-    ...overrides,
-  }
-}
-
-function makeError(overrides: Partial<IncomingError> = {}): IncomingError {
-  return {
-    sessionId: "ses_int",
-    errorName: "APIError",
-    errorMessage: "rate_limited",
-    errorRaw: "{}",
-    statusCode: 429,
-    isRetryable: true,
-    responseHeaders: undefined,
-    responseBody: undefined,
-    ...overrides,
-  }
-}
 
 describe("integration", () => {
   beforeEach(() => {

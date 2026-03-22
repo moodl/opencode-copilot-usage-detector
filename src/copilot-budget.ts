@@ -1,16 +1,11 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import type {
   Event,
-  AssistantMessage,
   EventMessageUpdated,
   EventSessionError,
-  ApiError,
 } from "@opencode-ai/sdk"
-import type { IncomingMessage, IncomingError } from "./aggregator.js"
 import {
   recoverFromJSONL,
-  processAssistantMessage,
-  processErrorEvent,
   getDaily,
   getCurrentRPM,
   setTimezone,
@@ -19,111 +14,25 @@ import {
 import {
   ensureDataDir,
   readConfig,
-  appendObservation,
-  readObservations,
-  readEstimates,
   clearTodayObservations,
   removeObservations,
   clearEstimates,
 } from "./persistence.js"
 import { budgetTool, formatStatus, formatHistory, formatErrors, formatInsights } from "./tools.js"
-import { enableDebug, debugLogEvent, debugLogChatParams } from "./debug.js"
-import {
-  classifyErrorImmediate,
-  extractRateLimitHeaders,
-  scheduleReclassification,
-} from "./classifier.js"
-import { getBudgetStatus, checkThresholds, computeEstimates } from "./estimator.js"
+import { enableDebug, debugLogEvent, debugLogChatParams, debugLogError } from "./debug.js"
+import { getBudgetStatus, computeEstimates } from "./estimator.js"
 import {
   pollPremiumRequests,
   getCachedPremiumRequests,
   formatPremiumRequestStatus,
 } from "./github-api.js"
 import { handled } from "./command-handled.js"
+import { handleMessageUpdated, handleSessionError } from "./event-handlers.js"
 
-// ============================================================
-// Helpers
-// ============================================================
+export { formatTokens as formatTokensShort } from "./format.js"
+import { formatTokens as formatTokensShort } from "./format.js"
 
-export function formatTokensShort(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`
-  return String(n)
-}
-
-export function isAssistantMessage(msg: unknown): msg is AssistantMessage {
-  return (
-    typeof msg === "object" &&
-    msg !== null &&
-    (msg as any).role === "assistant" &&
-    typeof (msg as any).id === "string"
-  )
-}
-
-export function isApiError(error: unknown): error is ApiError {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as any).name === "APIError"
-  )
-}
-
-const MODEL_BLOCKED_MESSAGE_PATTERNS = [
-  "not available",
-  "not supported",
-  "forbidden",
-  "access denied",
-  "not authorized",
-  "not included",
-  "not enabled",
-  "model not found",
-  "not allowed",
-  "not permitted",
-  "does not have access",
-  "not part of your",
-  "unavailable for your",
-]
-
-export function isModelBlockedError(
-  error: ApiError,
-  modelCumulativeTokens: number,
-  modelCumulativeRequests: number
-): boolean {
-  const code = error.data?.statusCode
-  const msg = error.data?.message?.toLowerCase() ?? ""
-
-  // 403 Forbidden — always blocked
-  if (code === 403) return true
-
-  // Message patterns + model was never successfully used
-  if (modelCumulativeTokens === 0 && modelCumulativeRequests === 0) {
-    if (MODEL_BLOCKED_MESSAGE_PATTERNS.some((p) => msg.includes(p))) return true
-  }
-
-  // 401 with model-specific denial (not generic auth failure)
-  if (code === 401 && MODEL_BLOCKED_MESSAGE_PATTERNS.some((p) => msg.includes(p))) {
-    return true
-  }
-
-  return false
-}
-
-export function isRateLimitError(error: ApiError): boolean {
-  const code = error.data?.statusCode
-  const msg = error.data?.message?.toLowerCase() ?? ""
-  return (
-    code === 429 ||
-    msg.includes("rate") ||
-    msg.includes("limit") ||
-    msg.includes("exceeded") ||
-    msg.includes("capacity") ||
-    msg.includes("throttl")
-  )
-}
-
-function readRecentObservations(sinceTs: string) {
-  return readObservations({ since: sinceTs })
-}
+export { isAssistantMessage, isApiError, isModelBlockedError, isRateLimitError } from "./guards.js"
 
 // ============================================================
 // Plugin
@@ -147,7 +56,7 @@ const plugin = (async (ctx) => {
   for (const w of configWarnings) {
     try {
       client.app.log({ body: { service: "copilot-budget", level: "warn", message: `Config: ${w}` } })
-    } catch { /* */ }
+    } catch (e) { debugLogError("copilot-budget.configWarning", e) }
   }
 
   // Cache whether a session is a subagent (avoids repeated API calls)
@@ -194,8 +103,8 @@ const plugin = (async (ctx) => {
         )
         usageEventsSinceRecompute = 0
         lastRecomputeTime = now
-      } catch {
-        // Recompute failure is not critical
+      } catch (e) {
+        debugLogError("copilot-budget.recomputeEstimates", e)
       }
     }
   }
@@ -210,8 +119,8 @@ const plugin = (async (ctx) => {
           parts: [{ type: "text", text, ignored: true }],
         },
       })
-    } catch {
-      // Notification failure is not critical
+    } catch (e) {
+      debugLogError("copilot-budget.sendMessage", e)
     }
   }
 
@@ -223,9 +132,18 @@ const plugin = (async (ctx) => {
   ): Promise<void> {
     try {
       await client.tui.showToast({ body: { title, message, variant, duration: 5000 } })
-    } catch {
-      // Toast failure is not critical
+    } catch (e) {
+      debugLogError("copilot-budget.showToast", e)
     }
+  }
+
+  // Shared deps for event handlers
+  const handlerDeps = {
+    config,
+    getSessionModel,
+    showToast,
+    maybeRecomputeEstimates,
+    incrementUsageEvents: () => { usageEventsSinceRecompute++ },
   }
 
   return {
@@ -245,7 +163,7 @@ const plugin = (async (ctx) => {
     // ----------------------------------------------------------
     "command.execute.before": async (
       input: { command: string; sessionID: string; arguments: string },
-      _output: { parts: any[] }
+      _output: { parts: unknown[] }
     ) => {
       if (input.command !== "budget") return
 
@@ -314,14 +232,11 @@ const plugin = (async (ctx) => {
                 removed = removeObservations({ type: "limit_hit" })
                 break
               case "fake_hits": {
-                // Remove limit_hits from models that have no successful usage — these are
-                // blocked models that were misrecorded as rate limits by the old code
                 const d = getDaily()
                 removed = removeObservations({
                   predicate: (e) =>
                     e.type === "limit_hit" &&
-                    "model" in e &&
-                    !d.byModel[(e as any).model],
+                    !d.byModel[e.model],
                 })
                 break
               }
@@ -349,7 +264,6 @@ const plugin = (async (ctx) => {
             if (cleanResult) {
               result = cleanResult
             } else {
-              // Recompute after cleaning
               clearEstimates()
               resetState()
               recoverFromJSONL()
@@ -359,7 +273,7 @@ const plugin = (async (ctx) => {
                   config.known_stable_models,
                   config.premium_request_multipliers
                 )
-              } catch { /* */ }
+              } catch (e) { debugLogError("copilot-budget.cleanRecompute", e) }
               result = `Cleaned ${removed} observation(s). Estimates recomputed.`
             }
           }
@@ -379,268 +293,23 @@ const plugin = (async (ctx) => {
           ].join("\n")
       }
 
-      // Send result as a no-reply message, then throw sentinel to abort
-      // the command flow before OpenCode invokes the LLM.
-      // This is the standard pattern used by opencode-quota, DCP, etc.
       await sendMessage(input.sessionID, result)
       handled()
     },
 
     // ----------------------------------------------------------
-    // Event handler
+    // Event handler (delegates to extracted handlers)
     // ----------------------------------------------------------
     event: async ({ event }: { event: Event }) => {
       try {
         debugLogEvent(event.type, event)
 
-        // ----- message.updated: extract tokens from assistant messages -----
         if (event.type === "message.updated") {
-          const msgEvent = event as EventMessageUpdated
-          const msg = msgEvent.properties.info
-          if (!isAssistantMessage(msg)) return
-
-          const finished = !!msg.finish
-          const tokens = msg.tokens ?? {
-            input: 0,
-            output: 0,
-            reasoning: 0,
-            cache: { read: 0, write: 0 },
-          }
-
-          const sm = getSessionModel(msg.sessionID)
-          const incoming: IncomingMessage = {
-            messageId: msg.id,
-            sessionId: msg.sessionID,
-            modelId: msg.modelID ?? sm.model ?? "unknown",
-            providerId: msg.providerID ?? sm.provider ?? "unknown",
-            tokens: {
-              total: tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write,
-              input: tokens.input,
-              output: tokens.output,
-              reasoning: tokens.reasoning,
-              cache: tokens.cache,
-            },
-            cost: msg.cost ?? 0,
-            finished,
-          }
-
-          processAssistantMessage(incoming)
-          usageEventsSinceRecompute++
-          maybeRecomputeEstimates()
-
-          // Detect silent model fallback
-          if (finished && msg.modelID && sm.model && msg.modelID !== sm.model) {
-            appendObservation({
-              ts: new Date().toISOString(),
-              type: "model_fallback",
-              requested: sm.model,
-              received: msg.modelID,
-              day_cumulative_tokens: getDaily().totalTokens,
-            })
-          }
-
-          // Check threshold notifications
-          if (finished && !config.quiet_mode) {
-            const d = getDaily()
-            const status = getBudgetStatus(
-              d.totalTokens, d.totalRequests, d.totalCost, d.byModel,
-              d.limitHits.length, config.known_preview_models,
-              config.known_stable_models, config.premium_request_multipliers
-            )
-
-            const threshold = checkThresholds(
-              status.percentage, config.notification_thresholds, d.notifiedThresholds
-            )
-
-            if (threshold !== null) {
-              d.notifiedThresholds.add(threshold)
-              const pctStr = status.percentage !== null ? `${status.percentage}%` : "?"
-              const limitStr = status.estimatedTokenLimit
-                ? formatTokensShort(status.estimatedTokenLimit) : "unknown"
-              const confStr = status.confidence > 0.8 ? ""
-                : status.confidence > 0.5 ? " (moderate confidence)" : " (low confidence)"
-              await showToast(
-                "Budget Warning",
-                `${pctStr} of daily budget used (${formatTokensShort(d.totalTokens)} / ~${limitStr} est.)${confStr}`,
-                "warning"
-              )
-            }
-          }
+          await handleMessageUpdated(handlerDeps, event as EventMessageUpdated)
         }
 
-        // ----- session.error: log all errors, detect rate limits -----
         if (event.type === "session.error") {
-          const errEvent = event as EventSessionError
-          const error = errEvent.properties.error
-          if (!error) return
-          const sessionId = errEvent.properties.sessionID
-          const errSm = getSessionModel(sessionId ?? "")
-
-          if (isApiError(error)) {
-            const apiErr = error
-            const errModel = errSm.model ?? "unknown"
-            const modelUsage = getDaily().byModel[errModel]
-            const modelTokens = modelUsage?.tokens ?? 0
-            const modelRequests = modelUsage?.requests ?? 0
-
-            // Helper: record blocked model event and optionally notify user
-            async function handleBlockedModel(): Promise<void> {
-              const d = getDaily()
-              const blockedTs = new Date().toISOString()
-              const alreadyNotified = d.blockedModels.some((b) => b.model === errModel)
-
-              d.blockedModels.push({
-                ts: blockedTs,
-                model: errModel,
-                errorMessage: apiErr.data?.message ?? "",
-                statusCode: apiErr.data?.statusCode,
-              })
-
-              appendObservation({
-                ts: blockedTs,
-                type: "model_blocked",
-                session: sessionId ?? "unknown",
-                model: errModel,
-                provider: errSm.provider ?? "unknown",
-                error_name: apiErr.name,
-                error_message: apiErr.data?.message ?? "",
-                error_raw: JSON.stringify(apiErr),
-                status_code: apiErr.data?.statusCode,
-                is_retryable: apiErr.data?.isRetryable ?? false,
-                day_cumulative_tokens: d.totalTokens,
-                day_cumulative_requests: d.totalRequests,
-              })
-
-              // Only notify once per model per day
-              if (!alreadyNotified) {
-                await showToast(
-                  "Model Blocked",
-                  `${errModel} is not available on your plan (status: ${apiErr.data?.statusCode ?? "unknown"})`,
-                  "warning"
-                )
-              }
-            }
-
-            // Check for blocked model BEFORE rate limit check
-            if (isModelBlockedError(apiErr, modelTokens, modelRequests)) {
-              await handleBlockedModel()
-              return // Skip rate-limit path entirely
-            }
-
-            const rateLimitHeaders = extractRateLimitHeaders(apiErr.data?.responseHeaders)
-            const classification = classifyErrorImmediate(
-              apiErr.data?.message ?? "", apiErr.data?.statusCode, apiErr.data?.responseHeaders
-            )
-
-            // Safety net: classifier detected blocked model that bypassed isModelBlockedError
-            if (classification.class === "model_blocked") {
-              await handleBlockedModel()
-              return
-            }
-
-            if (isRateLimitError(apiErr)) {
-              const incomingError: IncomingError = {
-                sessionId,
-                errorName: apiErr.name,
-                errorMessage: apiErr.data?.message ?? "",
-                errorRaw: JSON.stringify(apiErr),
-                statusCode: apiErr.data?.statusCode,
-                isRetryable: apiErr.data?.isRetryable ?? false,
-                responseHeaders: apiErr.data?.responseHeaders,
-                responseBody: apiErr.data?.responseBody,
-              }
-
-              const errorTs = processErrorEvent(incomingError, errSm.model, errSm.provider)
-              maybeRecomputeEstimates(true)
-
-              const d = getDaily()
-              if (d.limitHits.length > 0) {
-                d.limitHits[d.limitHits.length - 1].class = classification.class
-              }
-
-              // Schedule delayed reclassification (10 min after event)
-              scheduleReclassification(errorTs, () => {
-                const current = getDaily()
-                const recentObs = readRecentObservations(errorTs)
-                const errorModel = errSm.model ?? "unknown"
-                const otherModels = recentObs
-                  .filter((o): o is import("./types.js").UsageEvent => o.type === "usage" && o.model !== errorModel)
-                  .map((o) => o.model)
-                const uniqueOtherModels = [...new Set(otherModels)]
-                const totalRecent = recentObs.length
-                const errorRecent = recentObs.filter((o) => o.type === "limit_hit").length
-                const recoveryEvent = recentObs.find((o) => o.type === "recovery")
-                const recoveryMinutes = recoveryEvent
-                  ? (new Date(recoveryEvent.ts).getTime() - new Date(errorTs).getTime()) / 60_000
-                  : null
-
-                return {
-                  recentObservations: recentObs.map((o) => ({
-                    type: o.type,
-                    model: "model" in o ? String((o as unknown as Record<string, unknown>).model) : undefined,
-                    ts: o.ts,
-                  })),
-                  dailyTokens: current.totalTokens,
-                  dailyRequests: current.totalRequests,
-                  globalEstimate: (() => {
-                    try {
-                      const est = readEstimates()
-                      if (est && typeof est === "object") {
-                        const gdb = (est as Record<string, unknown>).globalDailyBudget
-                        if (gdb && typeof gdb === "object") {
-                          const te = (gdb as Record<string, unknown>).tokenEstimate
-                          if (te && typeof te === "object") {
-                            const val = (te as Record<string, unknown>).value
-                            return typeof val === "number" ? val : null
-                          }
-                        }
-                      }
-                      return null
-                    } catch { return null }
-                  })(),
-                  otherModelsWorking: uniqueOtherModels.length > 0,
-                  workingModels: uniqueOtherModels,
-                  errorRate: totalRecent > 0 ? errorRecent / totalRecent : 0,
-                  minutesSinceError: (Date.now() - new Date(errorTs).getTime()) / 60_000,
-                  hasRecovered: !!recoveryEvent,
-                  recoveryMinutes,
-                }
-              })
-
-              // Notify user via toast (non-intrusive)
-              await showToast(
-                "Rate Limited",
-                `${formatTokensShort(d.totalTokens)} tokens, ${d.totalRequests} req | ${errSm.model ?? "unknown"} | ${classification.class}`,
-                "error"
-              )
-            } else {
-              appendObservation({
-                ts: new Date().toISOString(),
-                type: "error_logged",
-                session: sessionId ?? "unknown",
-                model: errSm.model ?? "unknown",
-                provider: errSm.provider ?? "unknown",
-                error_name: apiErr.name,
-                error_message: apiErr.data?.message ?? "",
-                error_raw: JSON.stringify(apiErr),
-                status_code: apiErr.data?.statusCode,
-                is_retryable: apiErr.data?.isRetryable ?? false,
-              })
-            }
-          } else {
-            appendObservation({
-              ts: new Date().toISOString(),
-              type: "error_logged",
-              session: sessionId ?? "unknown",
-              model: errSm.model ?? "unknown",
-              provider: errSm.provider ?? "unknown",
-              error_name: (error as any).name ?? "Unknown",
-              error_message: (error as any).data?.message ?? "",
-              error_raw: JSON.stringify(error),
-              status_code: undefined,
-              is_retryable: false,
-            })
-          }
+          await handleSessionError(handlerDeps, event as EventSessionError)
         }
       } catch (err) {
         try {
@@ -651,8 +320,8 @@ const plugin = (async (ctx) => {
               message: `Event handler error: ${err instanceof Error ? err.message : String(err)}`,
             },
           })
-        } catch {
-          // Even logging failed, silently ignore
+        } catch (e) {
+          debugLogError("copilot-budget.eventHandlerLog", e)
         }
       }
     },
@@ -665,8 +334,8 @@ const plugin = (async (ctx) => {
         sessionModels.set(sessionID, { model: model.id, provider: provider.info.id, ts: Date.now() })
         pruneSessionModels()
         debugLogChatParams(model, provider)
-      } catch {
-        // Non-critical
+      } catch (e) {
+        debugLogError("copilot-budget.chatParams", e)
       }
     },
 
@@ -681,7 +350,8 @@ const plugin = (async (ctx) => {
             try {
               const session = await client.session.get({ path: { id: input.sessionID } })
               subagentCache.set(input.sessionID, !!session.data?.parentID)
-            } catch {
+            } catch (e) {
+              debugLogError("copilot-budget.subagentCheck", e)
               subagentCache.set(input.sessionID, false)
             }
           }
@@ -724,8 +394,8 @@ ${limitHitLine}
 ${blockedLine}${previewLine}${insightLine}
 </copilot-budget>`
         )
-      } catch {
-        // Non-critical
+      } catch (e) {
+        debugLogError("copilot-budget.systemTransform", e)
       }
     },
 
@@ -741,8 +411,8 @@ ${blockedLine}${previewLine}${insightLine}
         output.context.push(
           `The user has used ${formatTokensShort(d.totalTokens)} tokens today across ${d.totalRequests} requests. ${d.limitHits.length > 0 ? `Rate-limited ${d.limitHits.length} time(s) today.` : "No rate limits hit today."}${blockedStr}`
         )
-      } catch {
-        // Non-critical
+      } catch (e) {
+        debugLogError("copilot-budget.sessionCompacting", e)
       }
     },
 
